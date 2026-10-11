@@ -8,6 +8,28 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.5.1] - 2026-10-11
+
+### Changed
+
+- Phone page: swiping the cover is now animated like a carousel. The cover follows the
+  finger at the same speed, and the cover of the next or previous track slides in
+  beside it. On release both glide into place, or back if the swipe was too short.
+  On the first and last track the cover only gives a little and springs back.
+- A slow drag counts too once the cover has been moved by 40% of its width. Before,
+  only a quick flick changed the track.
+- Title, artist and seek bar switch together with the cover, without waiting for the
+  WiiM to confirm the change. If the change fails, the page returns to the real state.
+- With "reduce motion" switched on in the phone's settings, a swipe changes the track
+  without any animation.
+
+### Fixed
+
+- Two quick swipes in a row moved one track only, because the second swipe still
+  started from the old track. Each swipe now starts from the track the page shows.
+- A touch that ended without the page noticing could leave swiping dead until the
+  page was reloaded.
+
 ## [0.5.0] - 2026-10-11
 
 ### Added
@@ -167,6 +189,7 @@ First version. Published as an image only; there is no git tag for it.
 - Container support: credentials and path secret from environment variables,
   `/healthz`, a Dockerfile.
 
+[0.5.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.5.1
 [0.5.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.5.0
 [0.4.2]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.2
 [0.4.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.1
