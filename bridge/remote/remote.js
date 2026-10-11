@@ -15,7 +15,15 @@ const STATUS_MS = 4000;
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) => $(`icon-${name}`).content.cloneNode(true);
-const setIcon = (node, name) => node.replaceChildren(icon(name));
+const setIcon = (button, name) => {
+  let wrap = button.querySelector(".ic");
+  if (!wrap) {
+    wrap = el("span", "ic");
+    button.replaceChildren(wrap);
+  }
+  wrap.dataset.icon = name;
+  wrap.replaceChildren(icon(name));
+};
 const fillIcons = (root) => {
   for (const node of root.querySelectorAll("[data-icon]")) {
     if (!node.firstChild) node.append(icon(node.dataset.icon));
@@ -593,18 +601,14 @@ function setHandler(action, handler) {
   }
 }
 
-function seekBy(delta) {
-  seekTo(estimated() + delta);
-}
-
 function installHandlers() {
   setHandler("play", () => { runCommands([{ action: "start" }]); });
   setHandler("pause", () => { runCommands([{ action: "stop" }]); });
   setHandler("nexttrack", goNext);
   setHandler("previoustrack", goPrevious);
   setHandler("seekto", (details) => seekTo(details && details.seekTime));
-  setHandler("seekbackward", (details) => seekBy(-((details && details.seekOffset) || 10)));
-  setHandler("seekforward", (details) => seekBy((details && details.seekOffset) || 10));
+  setHandler("seekbackward", null);
+  setHandler("seekforward", null);
 }
 
 function removeHandlers() {
