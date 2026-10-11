@@ -119,38 +119,58 @@ patched Feishin both follow it.
   to fetch the audio.
 - Python and `aiohttp`, nothing else. Developed and tested on Python 3.14 with aiohttp 3.14.
 
+## Configuration
+
+The bridge needs to know four things. Everything else has a default.
+
+| What | Environment variable | Option | Default |
+|---|---|---|---|
+| The address the WiiM uses to reach the bridge | `BRIDGE_ADVERTISE_HOST` | `--advertise-host` | none, **required** |
+| The WiiM's address | `BRIDGE_DEVICE_HOST` | `--device-host` | none, **required** |
+| Where Navidrome is | `BRIDGE_NAVIDROME_URL` | `--navidrome-url` | `http://127.0.0.1:4533` |
+| A Navidrome user | `BRIDGE_NAVIDROME_USER`, `BRIDGE_NAVIDROME_PASSWORD` | `--credentials` (a file) | none, **required** |
+
+There is no configuration file besides the optional credentials file. A setting is taken
+from the command line first, then from the environment, then from its default. If a
+required setting is missing, the bridge names it and exits.
+
+Why the two addresses: the bridge gives the WiiM web addresses to fetch audio from, so
+it must know under which address the WiiM can reach it. That address has to be an IP
+the WiiM can connect to over plain HTTP. And the bridge sends commands to the WiiM, so
+it must know where the WiiM is.
+
+The Navidrome user is the one the bridge itself uses to look up songs and fetch audio.
+Give it as two environment variables, or as a file readable only by you:
+
+```
+# ~/.config/navidrome-wiim-bridge/credentials.json, mode 600
+{"user": "...", "password": "..."}
+```
+
+Further settings:
+
+| Environment variable | Option | Default | Meaning |
+|---|---|---|---|
+| `BRIDGE_PORT` | `--port` | `8098` | port to listen on |
+| `BRIDGE_BIND` | `--bind` | `0.0.0.0` | address to listen on |
+| `BRIDGE_SECRET` | `--secret` | random per start | path secret for the audio addresses, see below |
+| `BRIDGE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
+| `BRIDGE_MAX_VOLUME` | `--max-volume` | `100` | ceiling for the volume, 0 to 100 |
+| `BRIDGE_KEEP_QUEUE_ON_START` | `--keep-queue-on-start` | `false` | do not clear the device queue when the bridge starts |
+| `BRIDGE_QUEUE_NAME` | `--queue-name` | `bridge` | name of the queue on the device |
+| `BRIDGE_CREDENTIALS` | `--credentials` | `~/.config/navidrome-wiim-bridge/credentials.json` | the credentials file |
+| `BRIDGE_REQUEST_LOG` | `--log` | `/dev/null` | file for a JSON log of the device's audio requests |
+| `BRIDGE_DEVICE_BASE` | `--device-base` | `http://<device host>:49152` | the WiiM's UPnP address, if it differs |
+| `BRIDGE_STATUS_URL` | `--status-url` | `https://<device host>/httpapi.asp?command=getPlayerStatus` | the WiiM's status address, if it differs |
+
 ## Running it
 
-Credentials come from a file or from the environment.
-
 ```
-# file, readable only by you: {"user": "...", "password": "..."}
-chmod 600 ~/.config/navidrome-wiim-bridge/credentials.json
-
-python tools/bridge_server.py \
-  --advertise-host 192.0.2.10 \
-  --navidrome-url http://127.0.0.1:4533 \
-  --device-base http://192.0.2.20:49152 \
-  --status-url "https://192.0.2.20/httpapi.asp?command=getPlayerStatus"
+export BRIDGE_ADVERTISE_HOST=192.0.2.10     # this machine, as the WiiM sees it
+export BRIDGE_DEVICE_HOST=192.0.2.20        # the WiiM
+export BRIDGE_NAVIDROME_URL=http://127.0.0.1:4533
+python tools/bridge_server.py
 ```
-
-| Option | Meaning |
-|---|---|
-| `--advertise-host` | the address the WiiM uses to reach the bridge |
-| `--port` | port to listen on, default 8098 |
-| `--navidrome-url` | where Navidrome is |
-| `--device-base` | the WiiM's UPnP address, port 49152 |
-| `--status-url` | the WiiM's status API (HTTPS, self-signed) |
-| `--credentials` | the JSON file with the Navidrome user |
-| `--secret` | fixed path secret for the audio URLs, see below; default random per start |
-| `--max-volume` | ceiling for the volume, 0 to 100, default 100 |
-| `--keep-queue-on-start` | do not clear the device queue when the bridge starts |
-| `--log` | file for the log of the device's audio requests |
-| `--no-info-file` | do not write the helper file with the base URL |
-| `--log-level` | `debug`, `info`, `warn` or `error`; default `info` |
-
-Environment variables, meant for containers: `BRIDGE_NAVIDROME_USER`,
-`BRIDGE_NAVIDROME_PASSWORD` (both or neither), `BRIDGE_SECRET` and `BRIDGE_LOG_LEVEL`.
 
 At start the bridge checks that Navidrome accepts the user and exits if not. It also
 clears its queue on the device, so a restart stops the music.
@@ -200,13 +220,22 @@ messages lose everything after the `?`.
 ### Container
 
 ```
-podman build -t navidrome-wiim-bridge .
 podman run --rm -p 8098:8098 \
-  -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... -e BRIDGE_SECRET=... \
-  navidrome-wiim-bridge \
-  --advertise-host 192.0.2.10 --navidrome-url http://navidrome:4533 \
-  --log /dev/null --no-info-file
+  -e BRIDGE_ADVERTISE_HOST=192.0.2.10 \
+  -e BRIDGE_DEVICE_HOST=192.0.2.20 \
+  -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
+  -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
+  -e BRIDGE_SECRET=... \
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.3.0
 ```
+
+### Kubernetes
+
+Ready-made manifests are in [`deploy/kubernetes/`](deploy/kubernetes/): a ConfigMap for
+the addresses, a Deployment, a Service for clients and a LoadBalancer Service with a
+fixed address for the WiiM, plus examples for an Ingress and a Gateway API route. The
+login goes into a Secret you create yourself. Plain YAML with a `kustomization.yaml`,
+no Helm. The steps are in that folder's README.
 
 `GET /healthz` answers `ok` without touching the device or Navidrome.
 
