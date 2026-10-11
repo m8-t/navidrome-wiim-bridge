@@ -52,9 +52,9 @@ MEDIA_INFO = r"""<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
 <u:GetMediaInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
 <NrTracks>1</NrTracks>
 <MediaDuration>00:03:16</MediaDuration>
-<CurrentURI>http://172.16.20.30:4533/rest/stream.view?id=5gFSmk6J99a0AZx7u5uYMP&amp;v=1.13.0&amp;c=XXX&amp;u=XXX&amp;s=XXX&amp;t=XXX</CurrentURI>
+<CurrentURI>http://192.0.2.30:4533/rest/stream.view?id=5gFSmk6J99a0AZx7u5uYMP&amp;v=1.13.0&amp;c=XXX&amp;u=XXX&amp;s=XXX&amp;t=XXX</CurrentURI>
 <CurrentURIMetaData>&lt;DIDL-Lite&gt;...&lt;/DIDL-Lite&gt;</CurrentURIMetaData>
-<NextURI>http://172.16.20.30:4533/rest/stream.view?id=67dH1IcXCSk65j1V5Ajn7X&amp;v=1.13.0&amp;c=XXX&amp;u=XXX&amp;s=XXX&amp;t=XXX</NextURI>
+<NextURI>http://192.0.2.30:4533/rest/stream.view?id=67dH1IcXCSk65j1V5Ajn7X&amp;v=1.13.0&amp;c=XXX&amp;u=XXX&amp;s=XXX&amp;t=XXX</NextURI>
 <NextURIMetaData>&lt;DIDL-Lite&gt;...&lt;/DIDL-Lite&gt;</NextURIMetaData>
 <TrackSource></TrackSource>
 <PlayMedium>THIRD-DLNA</PlayMedium>
@@ -101,7 +101,7 @@ BROWSE_CONTEXT = r"""<?xml version="1.0"?>
 <Tracks>
 <Track1>
 <Id>1</Id>
-<URL>http://172.16.20.30:8098/s/SECRET/range/0zyJc2ogSZBFHR1lz0d7yq.flac</URL>
+<URL>http://192.0.2.30:8098/s/SECRET/range/0zyJc2ogSZBFHR1lz0d7yq.flac</URL>
 <Metadata>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
 &lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot;&gt;
 &lt;dc:title&gt;You Can&apos;t Hide, You Can&apos;t Run&lt;/dc:title&gt;
@@ -112,7 +112,7 @@ BROWSE_CONTEXT = r"""<?xml version="1.0"?>
 </Track1>
 <Track2>
 <Id>2</Id>
-<URL>http://172.16.20.30:8098/s/SECRET/range/5gFSmk6J99a0AZx7u5uYMP.flac</URL>
+<URL>http://192.0.2.30:8098/s/SECRET/range/5gFSmk6J99a0AZx7u5uYMP.flac</URL>
 <Metadata>&lt;dc:title&gt;PoC track 2&lt;/dc:title&gt;</Metadata>
 <Source>UPnPServer</Source>
 </Track2>
@@ -223,11 +223,11 @@ def test_parse_values() -> None:
         ("CurrentURI", "NextURI", "TrackSource", "Missing", "CurrentURIMetaData"),
     )
     assert values["CurrentURI"] == (
-        "http://172.16.20.30:4533/rest/stream.view?id=5gFSmk6J99a0AZx7u5uYMP"
+        "http://192.0.2.30:4533/rest/stream.view?id=5gFSmk6J99a0AZx7u5uYMP"
         "&v=1.13.0&c=XXX&u=XXX&s=XXX&t=XXX"
     )
     assert values["NextURI"] == (
-        "http://172.16.20.30:4533/rest/stream.view?id=67dH1IcXCSk65j1V5Ajn7X"
+        "http://192.0.2.30:4533/rest/stream.view?id=67dH1IcXCSk65j1V5Ajn7X"
         "&v=1.13.0&c=XXX&u=XXX&s=XXX&t=XXX"
     )
     assert values["TrackSource"] == ""
@@ -553,13 +553,13 @@ def test_parse_queue_context_and_tracks() -> None:
         {
             "index": "1",
             "id": "1",
-            "url": "http://172.16.20.30:8098/s/SECRET/range/0zyJc2ogSZBFHR1lz0d7yq.flac",
+            "url": "http://192.0.2.30:8098/s/SECRET/range/0zyJc2ogSZBFHR1lz0d7yq.flac",
             "title": "You Can't Hide, You Can't Run",
         },
         {
             "index": "2",
             "id": "2",
-            "url": "http://172.16.20.30:8098/s/SECRET/range/5gFSmk6J99a0AZx7u5uYMP.flac",
+            "url": "http://192.0.2.30:8098/s/SECRET/range/5gFSmk6J99a0AZx7u5uYMP.flac",
             "title": "PoC track 2",
         },
     ]

@@ -15,7 +15,7 @@ EXPECTED = {
         "parse_hms", "build_didl", "parse_values", "UpnpError", "parse_fault",
     ],
     "bridge.wiim": [
-        "DEFAULT_DEVICE_BASE", "CONTROL_PATH", "SERVICE", "DEFAULT_STATUS_URL",
+        "device_urls", "CONTROL_PATH", "SERVICE",
         "PLAYQUEUE_CONTROL_PATH", "PLAYQUEUE_SERVICE", "QueueTrack", "build_queue_context",
         "parse_queue_index", "parse_queue_context", "parse_queue_tracks", "tracks_from_album",
         "DeviceState", "describe_change", "redact_uri", "Wiim", "open_sessions",

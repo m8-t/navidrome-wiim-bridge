@@ -20,6 +20,7 @@ from test_player import FakeWiim
 from bridge import log as bridge_log
 from bridge.log import parse_level, setup_logging
 from bridge.subsonic import ConfigError
+from bridge.wiim import device_urls
 from bridge.proxy import RequestLog
 from bridge.app import (
     JUKEBOX_KEY,
@@ -325,7 +326,15 @@ def server_args(tmp_path: Path, credentials: Path) -> list[str]:
         "--secret", "S3cret-value",
         "--port", "9001",
         "--advertise-host", "10.0.0.5",
+        "--device-host", "192.0.2.50",
     ]  # fmt: skip
+
+
+@pytest.fixture(autouse=True)
+def clean_bridge_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in list(os.environ):
+        if name.startswith("BRIDGE_"):
+            monkeypatch.delenv(name)
 
 
 def test_bridge_server_main(
@@ -352,7 +361,11 @@ def test_bridge_server_main(
     records = [r for r in caplog.records if r.name == "bridge.server"]
     assert all(r.levelno == logging.INFO for r in records)
     messages = [r.getMessage() for r in records]
-    assert any(m.startswith("Feishin server URL: http://") for m in messages)
+    assert "listening on 0.0.0.0:9001, advertised as http://10.0.0.5:9001" in messages
+    assert "navidrome at http://navidrome.invalid:4533" in messages
+    assert "device at http://192.0.2.50:49152" in messages
+    assert "audio URLs under /s/<hidden>" in messages
+    assert "S3cret-value" not in "\n".join(messages)
     assert "hunter2-pw" not in "\n".join(messages)
 
 
@@ -585,9 +598,10 @@ def test_main_hides_secret_and_skips_info_file(
         "--no-info-file",
     ]
     argv[argv.index("--secret") : argv.index("--secret") + 2] = []
+    argv[argv.index("--info-file") : argv.index("--info-file") + 2] = []
     assert bridge_server.main(argv) == 0
     out = "\n".join(r.getMessage() for r in caplog.records)
-    assert "base URL: http://10.0.0.5:9001/s/<hidden>" in out
+    assert "audio URLs under /s/<hidden>" in out
     assert "env-secret-99" not in out
     assert "envpw-value" not in out
     assert not (tmp_path / "info.json").exists()
@@ -834,3 +848,249 @@ def test_round_trip_logs_contain_no_secrets(
     text = caplog.text
     for forbidden in ("SECRET", "pw", "abcd", "good", "tokensalt"):
         assert forbidden not in text, forbidden
+
+
+def settings_for(*argv: str, env: dict[str, str] | None = None) -> bridge_server.Settings:
+    base = ["--advertise-host", "192.0.2.10", "--device-host", "192.0.2.50"]
+    return bridge_server.resolve_settings(bridge_server.parse_args([*base, *argv]), env or {})
+
+
+def test_string_setting_precedence() -> None:
+    env = {"BRIDGE_NAVIDROME_URL": "http://env:1/"}
+    assert settings_for().navidrome_url == "http://127.0.0.1:4533"
+    assert settings_for(env=env).navidrome_url == "http://env:1"
+    assert settings_for("--navidrome-url", "http://opt:2", env=env).navidrome_url == "http://opt:2"
+    assert settings_for(env={"BRIDGE_NAVIDROME_URL": ""}).navidrome_url == "http://127.0.0.1:4533"
+
+
+def test_integer_setting_precedence() -> None:
+    assert settings_for().port == 8098
+    assert settings_for(env={"BRIDGE_PORT": "9000"}).port == 9000
+    assert settings_for("--port", "9100", env={"BRIDGE_PORT": "9000"}).port == 9100
+    assert settings_for(env={"BRIDGE_PORT": ""}).port == 8098
+    assert settings_for().max_volume == 100
+    assert settings_for(env={"BRIDGE_MAX_VOLUME": "0"}).max_volume == 0
+
+
+def test_boolean_setting_precedence() -> None:
+    assert settings_for().keep_queue_on_start is False
+    assert settings_for("--keep-queue-on-start").keep_queue_on_start is True
+    assert settings_for(env={"BRIDGE_KEEP_QUEUE_ON_START": ""}).keep_queue_on_start is False
+    for value, expected in [("true", True), ("1", True), ("YES", True), ("False", False),
+                            ("0", False), ("no", False)]:  # fmt: skip
+        env = {"BRIDGE_KEEP_QUEUE_ON_START": value}
+        assert settings_for(env=env).keep_queue_on_start is expected
+    env = {"BRIDGE_KEEP_QUEUE_ON_START": "false"}
+    assert settings_for("--keep-queue-on-start", env=env).keep_queue_on_start is True
+
+
+def test_other_defaults_and_env() -> None:
+    s = settings_for()
+    assert (s.bind, s.queue_name, s.log, s.info_file) == (
+        "0.0.0.0", "bridge", Path("/dev/null"), None,
+    )  # fmt: skip
+    assert s.credentials == "~/.config/navidrome-wiim-bridge/credentials.json"
+    env = {
+        "BRIDGE_BIND": "127.0.0.1",
+        "BRIDGE_QUEUE_NAME": "q",
+        "BRIDGE_REQUEST_LOG": "/tmp/x.jsonl",
+        "BRIDGE_CREDENTIALS": "/c.json",
+    }
+    s = settings_for(env=env)
+    assert (s.bind, s.queue_name, s.log, s.credentials) == (
+        "127.0.0.1", "q", Path("/tmp/x.jsonl"), "/c.json",
+    )  # fmt: skip
+    assert settings_for("--credentials", "/o.json", env=env).credentials == "/o.json"
+
+
+def test_device_host_derives_both_urls() -> None:
+    s = settings_for()
+    assert s.device_base == "http://192.0.2.50:49152"
+    assert s.status_url == "https://192.0.2.50/httpapi.asp?command=getPlayerStatus"
+
+
+def test_device_host_with_status_override() -> None:
+    s = settings_for("--status-url", "https://other/status")
+    assert s.device_base == "http://192.0.2.50:49152"
+    assert s.status_url == "https://other/status"
+    s = settings_for(env={"BRIDGE_DEVICE_BASE": "http://b:1"})
+    assert s.device_base == "http://b:1"
+
+
+def bare_settings(*argv: str, env: dict[str, str] | None = None) -> bridge_server.Settings:
+    args = bridge_server.parse_args(["--advertise-host", "192.0.2.10", *argv])
+    return bridge_server.resolve_settings(args, env or {})
+
+
+def test_device_base_and_status_without_host() -> None:
+    s = bare_settings("--device-base", "http://b:1", "--status-url", "https://s/x")
+    assert (s.device_base, s.status_url) == ("http://b:1", "https://s/x")
+
+
+@pytest.mark.parametrize("argv", [[], ["--device-base", "http://b:1"], ["--status-url", "https://s"]])
+def test_device_address_required(argv: list[str]) -> None:
+    with pytest.raises(ConfigError) as err:
+        bare_settings(*argv)
+    assert str(err.value) == "set BRIDGE_DEVICE_HOST (or --device-host) to the amplifier's address"
+
+
+def test_device_host_that_is_a_url_is_a_config_error() -> None:
+    with pytest.raises(ConfigError, match="not a URL"):
+        settings_for("--device-host", "http://192.0.2.50")
+
+
+def test_device_urls() -> None:
+    assert device_urls("192.0.2.50") == (
+        "http://192.0.2.50:49152",
+        "https://192.0.2.50/httpapi.asp?command=getPlayerStatus",
+    )
+    assert device_urls("amp.example")[0] == "http://amp.example:49152"
+    base, status = device_urls("2001:db8::1")
+    assert base == "http://[2001:db8::1]:49152"
+    assert status == "https://[2001:db8::1]/httpapi.asp?command=getPlayerStatus"
+    for bad in ("http://192.0.2.50", "192.0.2.50/x"):
+        with pytest.raises(ValueError, match="not a URL"):
+            device_urls(bad)
+
+
+def test_missing_advertise_host() -> None:
+    args = bridge_server.parse_args(["--device-host", "192.0.2.50"])
+    with pytest.raises(ConfigError) as err:
+        bridge_server.resolve_settings(args, {})
+    assert str(err.value) == (
+        "set BRIDGE_ADVERTISE_HOST (or --advertise-host) to the address "
+        "the amplifier uses to reach the bridge"
+    )
+    env = {"BRIDGE_ADVERTISE_HOST": "192.0.2.10"}
+    assert bridge_server.resolve_settings(args, env).advertise_host == "192.0.2.10"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("BRIDGE_PORT", "abc"), ("BRIDGE_PORT", "0"), ("BRIDGE_PORT", "70000"),
+        ("BRIDGE_MAX_VOLUME", "-1"), ("BRIDGE_MAX_VOLUME", "101"),
+        ("BRIDGE_KEEP_QUEUE_ON_START", "maybe"),
+    ],
+)  # fmt: skip
+def test_invalid_numeric_and_boolean_settings(name: str, value: str) -> None:
+    with pytest.raises(ConfigError, match=name):
+        settings_for(env={name: value})
+
+
+def test_invalid_option_value_names_the_option() -> None:
+    with pytest.raises(ConfigError, match="--port must be an integer from 1 to 65535"):
+        settings_for("--port", "abc")
+
+
+def forbid_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_network(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("network used")
+
+    monkeypatch.setattr(poc_proxy, "check_navidrome", no_network)
+    monkeypatch.setattr(bridge_server.web, "run_app", no_network)
+
+
+def good_creds(tmp_path: Path) -> Path:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "dan", "password": "pw"}))
+    creds.chmod(0o600)
+    return creds
+
+
+@pytest.mark.parametrize(
+    ("drop", "env", "message"),
+    [
+        ("--advertise-host", {}, "error: set BRIDGE_ADVERTISE_HOST"),
+        ("--device-host", {}, "error: set BRIDGE_DEVICE_HOST"),
+        ("--port", {"BRIDGE_PORT": "0"}, "error: BRIDGE_PORT must be"),
+        (None, {"BRIDGE_MAX_VOLUME": "101"}, "error: BRIDGE_MAX_VOLUME must be"),
+        (None, {"BRIDGE_KEEP_QUEUE_ON_START": "maybe"}, "error: BRIDGE_KEEP_QUEUE_ON_START"),
+    ],
+)  # fmt: skip
+def test_main_config_errors_before_network(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    drop: str | None,
+    env: dict[str, str],
+    message: str,
+) -> None:
+    forbid_network(monkeypatch)
+    argv = server_args(tmp_path, good_creds(tmp_path))
+    if drop is not None:
+        i = argv.index(drop)
+        argv[i : i + 2] = []
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert bridge_server.main(argv) == 2
+    assert message in capsys.readouterr().err
+
+
+def test_main_config_error_order(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    forbid_network(monkeypatch)
+    monkeypatch.setenv("BRIDGE_PORT", "0")
+    argv = ["--credentials", str(tmp_path / "missing.json"), "--secret", "bad"]
+
+    def err(*extra: str) -> str:
+        assert bridge_server.main([*argv, *extra]) == 2
+        return capsys.readouterr().err
+
+    assert "log level" in err("--log-level", "loud")
+    assert "BRIDGE_ADVERTISE_HOST" in err()
+    argv += ["--advertise-host", "192.0.2.10"]
+    assert "BRIDGE_DEVICE_HOST" in err()
+    argv += ["--device-host", "192.0.2.50"]
+    assert "BRIDGE_PORT" in err()
+    monkeypatch.delenv("BRIDGE_PORT")
+    assert "credentials file not found" in err()
+    argv[argv.index("--credentials") + 1] = str(good_creds(tmp_path))
+    assert "path secret" in err()
+
+
+def test_main_defaults_write_no_files_and_log_to_dev_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[BridgeConfig] = []
+
+    async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
+        return True, None
+
+    def fake_factory(config: BridgeConfig) -> Callable[[], Awaitable[None]]:
+        captured.append(config)
+
+        async def factory() -> None:
+            return None
+
+        return factory
+
+    monkeypatch.setattr(poc_proxy, "ping_navidrome", accepted)
+    monkeypatch.setattr(bridge_server, "make_app_factory", fake_factory)
+    monkeypatch.setattr(bridge_server.web, "run_app", lambda coro, **kw: coro.close())
+    monkeypatch.chdir(tmp_path)
+    argv = [
+        "--credentials", str(good_creds(tmp_path)),
+        "--advertise-host", "192.0.2.10",
+        "--device-host", "192.0.2.50",
+    ]  # fmt: skip
+    assert bridge_server.main(argv) == 0
+    assert captured[0].log_path == Path("/dev/null")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["creds.json"]
+    assert bridge_server.main([*argv, "--no-info-file"]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["creds.json"]
+    info = tmp_path / "sub" / "info.json"
+    assert bridge_server.main([*argv, "--info-file", str(info)]) == 0
+    assert json.loads(info.read_text())["base_url"].startswith("http://192.0.2.10:8098/s/")
+
+
+def test_no_private_lan_addresses_in_source() -> None:
+    root = Path(__file__).resolve().parent.parent
+    offenders = [
+        str(path)
+        for folder in ("bridge", "tools")
+        for path in (root / folder).rglob("*.py")
+        if any(marker in path.read_text(encoding="utf-8") for marker in ("172.16.", "192.168."))
+    ]
+    assert offenders == []

@@ -23,13 +23,21 @@ from bridge.soap import (
     soap_headers,
 )
 
-DEFAULT_DEVICE_BASE = "http://172.16.20.211:49152"
 CONTROL_PATH = "/upnp/control/rendertransport1"
-DEFAULT_STATUS_URL = "https://172.16.20.211/httpapi.asp?command=getPlayerStatus"
 PLAYQUEUE_CONTROL_PATH = "/upnp/control/PlayQueue1"
 PLAYQUEUE_SERVICE = "urn:schemas-wiimu-com:service:PlayQueue:1"
 RENDERING_CONTROL_PATH = "/upnp/control/rendercontrol1"
 RENDERING_SERVICE = "urn:schemas-upnp-org:service:RenderingControl:1"
+
+
+def device_urls(host: str) -> tuple[str, str]:
+    """Return (UPnP base URL, status API URL) for a device host name or IP address."""
+    if "://" in host or "/" in host:
+        raise ValueError("device host must be a host name or IP address, not a URL")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"http://{host}:49152", f"https://{host}/httpapi.asp?command=getPlayerStatus"
+
 
 SENSITIVE_PARAMS = frozenset({"u", "t", "s", "p", "c", "apikey", "token"})
 JUMP_TOLERANCE_MS = 1500

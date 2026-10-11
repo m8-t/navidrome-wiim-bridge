@@ -3,9 +3,10 @@
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,13 +17,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from bridge.soap import UpnpError, build_didl  # noqa: E402
 from bridge.wiim import (  # noqa: E402
-    DEFAULT_DEVICE_BASE,
-    DEFAULT_STATUS_URL,
     REQUEST_ERRORS,
     DeviceState,
     Wiim,
     build_queue_context,
     describe_change,
+    device_urls,
     open_sessions,
     parse_queue_tracks,
     redact_uri,
@@ -325,8 +325,13 @@ def _add_queue_commands(sub: Any) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Control a WiiM amplifier over UPnP.")
-    parser.add_argument("--device-base", default=DEFAULT_DEVICE_BASE)
-    parser.add_argument("--status-url", default=DEFAULT_STATUS_URL)
+    parser.add_argument("--device-host", help="amplifier host or IP (env BRIDGE_DEVICE_HOST)")
+    parser.add_argument(
+        "--device-base", help="UPnP base URL (env BRIDGE_DEVICE_BASE, default derived from host)"
+    )
+    parser.add_argument(
+        "--status-url", help="status API URL (env BRIDGE_STATUS_URL, default derived from host)"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("state", help="print transport, URIs and position")
     _add_track_options(sub.add_parser("play", help="set the URI and start playback"))
@@ -359,9 +364,26 @@ async def run(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_device(args: argparse.Namespace, environ: Mapping[str, str]) -> None:
+    """Fill args.device_base and args.status_url from options, environment or the host."""
+    host = args.device_host or environ.get("BRIDGE_DEVICE_HOST") or None
+    base = args.device_base or environ.get("BRIDGE_DEVICE_BASE") or None
+    status = args.status_url or environ.get("BRIDGE_STATUS_URL") or None
+    if host is not None:
+        try:
+            derived_base, derived_status = device_urls(host)
+        except ValueError as exc:
+            raise InputError(str(exc)) from None
+        base, status = base or derived_base, status or derived_status
+    elif base is None or status is None:
+        raise InputError("set BRIDGE_DEVICE_HOST (or --device-host) to the amplifier's address")
+    args.device_base, args.status_url = base, status
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        resolve_device(args, os.environ)
         return asyncio.run(run(args))
     except InputError as exc:
         print(f"error: {exc}", file=sys.stderr)

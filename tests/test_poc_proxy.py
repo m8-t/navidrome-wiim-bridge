@@ -567,12 +567,13 @@ def cli_args(tmp_path: Path, *extra: str) -> list[str]:
         str(tmp_path / "out" / "requests.jsonl"),
         "--navidrome-url",
         "http://navidrome.invalid:4533/",
+        *(() if "--advertise-host" in extra else ("--advertise-host", "192.0.2.30")),
         *extra,
     ]
 
 
 def test_main_reports_bad_credentials(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    args = ["--credentials", str(tmp_path / "missing.json")]
+    args = ["--credentials", str(tmp_path / "missing.json"), "--advertise-host", "192.0.2.30"]
     assert p.main(args) == 2
     assert capsys.readouterr().err.startswith("error: credentials file not found")
 
@@ -649,7 +650,7 @@ def test_default_secret_is_generated(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(p.web, "run_app", lambda app, **kwargs: None)
     assert p.main(cli_args(tmp_path)) == 0
     info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))
-    assert re.fullmatch(r"http://172\.16\.20\.30:8098/s/[A-Za-z0-9_-]{12}", info["base_url"])
+    assert re.fullmatch(r"http://192\.0\.2\.30:8098/s/[A-Za-z0-9_-]{12}", info["base_url"])
 
 
 def test_config_repr_hides_secrets(tmp_path: Path) -> None:

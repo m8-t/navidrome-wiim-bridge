@@ -7,4 +7,4 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 USER 65532:65532
 EXPOSE 8098
 ENTRYPOINT ["python", "tools/bridge_server.py"]
-CMD ["--log", "/dev/null", "--no-info-file"]
+CMD []

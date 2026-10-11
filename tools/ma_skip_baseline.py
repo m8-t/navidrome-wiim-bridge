@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import functools
 import json
+import os
 import statistics
 import sys
 import time
@@ -16,7 +17,6 @@ import aiohttp
 
 DEFAULT_MA_URL = "https://ma.m8t.io/api"
 DEFAULT_QUEUE_ID = "wiim_uuid:FF98F9ED-8DDE-B826-8681-21C8FF98F9ED"
-DEFAULT_WIIM_URL = "https://172.16.20.211/httpapi.asp?command=getPlayerStatus"
 DEFAULT_TOKEN_FILE = "~/.claude/keys/ma_token"
 
 Sig = tuple[str, str, str]
@@ -346,13 +346,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-out", metavar="PATH", default=None)
     parser.add_argument("--ma-url", default=DEFAULT_MA_URL)
     parser.add_argument("--queue-id", default=DEFAULT_QUEUE_ID)
-    parser.add_argument("--wiim-url", default=DEFAULT_WIIM_URL)
+    parser.add_argument(
+        "--wiim-url",
+        default=os.environ.get("BRIDGE_STATUS_URL") or None,
+        help="status API URL (env BRIDGE_STATUS_URL, required)",
+    )
     parser.add_argument("--token-file", default=DEFAULT_TOKEN_FILE)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    return asyncio.run(run(build_parser().parse_args(argv)))
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.wiim_url:
+        parser.error("set --wiim-url or BRIDGE_STATUS_URL")
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

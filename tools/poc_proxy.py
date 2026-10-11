@@ -8,6 +8,7 @@ every request the amplifier makes as one JSON object per line.
 import argparse
 import asyncio
 import json
+import os
 import secrets
 import sys
 import time
@@ -48,8 +49,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8098, help="port to listen on (default 8098)")
     parser.add_argument(
         "--advertise-host",
-        default="172.16.20.30",
-        help="host the amplifier uses to reach this proxy (default 172.16.20.30)",
+        default=os.environ.get("BRIDGE_ADVERTISE_HOST") or None,
+        help="host the amplifier uses to reach this proxy (env BRIDGE_ADVERTISE_HOST, required)",
     )
     parser.add_argument(
         "--navidrome-url",
@@ -74,7 +75,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=PROJECT_DIR / "results" / "proxy_info.json",
         help="where to write the base URL (default <project>/results/proxy_info.json)",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.advertise_host:
+        parser.error("set BRIDGE_ADVERTISE_HOST (or --advertise-host)")
+    return args
 
 
 def write_info_file(path: Path, base_url: str, navidrome_url: str, log_path: Path) -> None:
