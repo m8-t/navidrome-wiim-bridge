@@ -122,7 +122,7 @@ python tools/bridge_server.py \
 | `--device-base` | the WiiM's UPnP address, port 49152 |
 | `--status-url` | the WiiM's status API (HTTPS, self-signed) |
 | `--credentials` | the JSON file with the Navidrome user |
-| `--secret` | fixed path secret for the audio URLs, default random per start |
+| `--secret` | fixed path secret for the audio URLs, see below; default random per start |
 | `--max-volume` | ceiling for the volume, 0 to 100, default 100 |
 | `--keep-queue-on-start` | do not clear the device queue when the bridge starts |
 | `--log` | file for the log of the device's audio requests |
@@ -133,6 +133,31 @@ Environment variables, meant for containers: `BRIDGE_NAVIDROME_USER`,
 
 At start the bridge checks that Navidrome accepts the user and exits if not. It also
 clears its queue on the device, so a restart stops the music.
+
+### The path secret (`--secret`, `BRIDGE_SECRET`)
+
+The WiiM cannot log in anywhere. It can only fetch a plain URL. So the audio URLs the
+bridge hands to the device cannot be protected by the Navidrome login. They carry a
+secret in their path instead:
+
+```
+http://<bridge>:8098/s/<secret>/range/<song id>.flac
+```
+
+A request with the wrong secret gets "not found". The secret is the only thing that
+stops someone on the network from downloading tracks through the bridge without a
+login, so treat it like a password.
+
+- **Not set:** the bridge makes up a new random secret at every start. This is fine
+  for most setups, because the bridge clears the device queue at start anyway and
+  loads fresh URLs.
+- **Set:** the URLs stay the same across restarts. You need this with
+  `--keep-queue-on-start`, where the device keeps a queue full of old URLs that must
+  still work after the bridge comes back. It is also the tidy choice in a container,
+  where the value then lives in a secret store next to the Navidrome password.
+
+The value must be at least 8 characters from `A-Z a-z 0-9 _ -`, for example the output
+of `openssl rand -hex 16`. The bridge never prints it.
 
 ### Container
 
