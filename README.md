@@ -234,7 +234,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.4.2
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.5.0
 ```
 
 ### Kubernetes
@@ -259,7 +259,8 @@ to itself, which is why a patched build exists:
 
 **From a phone:** open `http://<bridge>:8098/remote/`. It is a small page built for
 portrait screens: a player with cover, seek bar, volume and mute, the queue, and a
-library view with search and album covers. Sign in with your Navidrome user. The phone
+library view with search and album covers. Swiping the cover to the left or right plays
+the next or previous track. Sign in with your Navidrome user. The phone
 stores a derived token, not the password.
 
 The page can also put its controls on the phone's lock screen. Phones only show such

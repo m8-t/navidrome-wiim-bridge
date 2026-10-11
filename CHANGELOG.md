@@ -8,6 +8,17 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.5.0] - 2026-10-11
+
+### Added
+
+- Phone page: swiping the album cover on the Player tab changes the track. A swipe to
+  the left plays the next track in the queue, a swipe to the right the previous one.
+  The cover follows the finger and slides back. Unlike the Previous button, a swipe to
+  the right always goes to the track before and never restarts the current one. On the
+  first track a swipe to the right does nothing, on the last track a swipe to the left
+  does nothing. Tested in a desktop browser with simulated touches only so far.
+
 ## [0.4.2] - 2026-10-11
 
 ### Changed
@@ -156,6 +167,7 @@ First version. Published as an image only; there is no git tag for it.
 - Container support: credentials and path secret from environment variables,
   `/healthz`, a Dockerfile.
 
+[0.5.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.5.0
 [0.4.2]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.2
 [0.4.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.1
 [0.4.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.0
