@@ -1,15 +1,19 @@
 """Subsonic jukeboxControl endpoint driving the bridge Player."""
 
 import asyncio
+import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 from aiohttp import web
 
+from bridge.log import redact
 from bridge.player import Player, PlayerError, Track
 from bridge.soap import UpnpError
 from bridge.wiim import REQUEST_ERRORS
+
+logger = logging.getLogger("bridge.jukebox")
 
 SongLookup = Callable[[str], Awaitable[Mapping[str, Any] | None]]
 Authenticator = Callable[[Mapping[str, str]], Awaitable[bool]]
@@ -20,6 +24,8 @@ ENVELOPE_BASE = {
     "serverVersion": "0.1",
     "openSubsonic": True,
 }
+WRONG_LOGIN = 40
+QUIET_ACTIONS = frozenset({"get", "status"})
 PATHS = ("/rest/jukeboxControl", "/rest/jukeboxControl.view")
 CORS_ORIGIN = {"Access-Control-Allow-Origin": "*"}
 CORS_PREFLIGHT = {
@@ -131,6 +137,7 @@ class Jukebox:
         if not self.loaded:
             return
         if not status.in_control:
+            logger.warning("lost control of the device queue")
             self.loaded = False
             self.playing = False
             self.position = 0
@@ -310,9 +317,10 @@ def add_jukebox_routes(
     async def run(request: web.Request) -> web.Response:
         params, ids = await _collect(request)
         if not await authenticate(params):
-            return reply(error_envelope(40, "Wrong username or password"))
+            logger.info("jukebox rejected login")
+            return reply(error_envelope(WRONG_LOGIN, "Wrong username or password"))
+        action = params.get("action")
         try:
-            action = params.get("action")
             if not action:
                 raise JukeboxError(10, "Required parameter is missing: action")
             index = _parse_int(params, "index")
@@ -322,7 +330,24 @@ def add_jukebox_routes(
             async with lock:
                 payload = await jukebox.handle(action, ids, index, offset, gain, mute)
         except JukeboxError as exc:
+            if exc.code == WRONG_LOGIN:
+                logger.info("jukebox rejected login")
+            else:
+                logger.warning(
+                    "jukebox action=%s failed code=%d: %s",
+                    action or "-",
+                    exc.code,
+                    redact(exc.message),
+                )
             return reply(error_envelope(exc.code, exc.message))
+        logger.log(
+            logging.DEBUG if action in QUIET_ACTIONS else logging.INFO,
+            "jukebox action=%s index=%s offset=%s ids=%d gain=%s mute=%s",
+            action,
+            *("-" if value is None else value for value in (index, offset)),
+            len(ids),
+            *("-" if value is None else value for value in (gain, mute)),
+        )
         return reply(ok_envelope(payload))
 
     async def preflight(request: web.Request) -> web.Response:

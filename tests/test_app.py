@@ -2,7 +2,9 @@ import asyncio
 import dataclasses
 import gzip
 import json
+import logging
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_player import FakeWiim
 
+from bridge import log as bridge_log
+from bridge.log import parse_level, setup_logging
 from bridge.subsonic import ConfigError
 from bridge.proxy import RequestLog
 from bridge.app import (
@@ -26,6 +30,18 @@ from bridge.app import (
     build_app,
     stream_url,
 )
+
+@pytest.fixture(autouse=True)
+def restore_logging() -> Any:
+    root = logging.getLogger()
+    access = logging.getLogger("aiohttp.access")
+    saved = (list(root.handlers), root.level, access.level, bridge_log._handler)
+    yield
+    root.handlers[:] = saved[0]
+    root.setLevel(saved[1])
+    access.setLevel(saved[2])
+    bridge_log._handler = saved[3]
+
 
 PAYLOAD = bytes(i % 251 for i in range(5000))
 GZ_BODY = gzip.compress(b"hello gzip " * 50)
@@ -313,7 +329,7 @@ def server_args(tmp_path: Path, credentials: Path) -> list[str]:
 
 
 def test_bridge_server_main(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     creds = tmp_path / "creds.json"
     creds.write_text(json.dumps({"user": "dan", "password": "hunter2-pw"}))
@@ -333,9 +349,11 @@ def test_bridge_server_main(
     info = json.loads((tmp_path / "info.json").read_text())
     assert info["base_url"] == "http://10.0.0.5:9001/s/S3cret-value"
     assert started["port"] == 9001
-    out = capsys.readouterr().out
-    assert any(line.startswith("Feishin server URL: http://") for line in out.splitlines())
-    assert "hunter2-pw" not in out
+    records = [r for r in caplog.records if r.name == "bridge.server"]
+    assert all(r.levelno == logging.INFO for r in records)
+    messages = [r.getMessage() for r in records]
+    assert any(m.startswith("Feishin server URL: http://") for m in messages)
+    assert "hunter2-pw" not in "\n".join(messages)
 
 
 def test_bridge_server_rejects_open_credentials(
@@ -427,15 +445,16 @@ def test_clear_on_start_can_be_disabled(tmp_path: Path) -> None:
 
 
 def test_unreachable_device_does_not_block_startup(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     class Unreachable(FakeWiim):
         async def stop(self) -> str:
             raise aiohttp.ClientConnectionError("device down")
 
     assert _run_started(tmp_path, Unreachable()) == 200
-    err = capsys.readouterr().err
-    assert "warning: could not clear the device queue at start: device down" in err
+    record = next(r for r in caplog.records if r.name == "bridge.app")
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "could not clear the device queue at start: device down"
 
 
 def test_bridge_server_keep_queue_option(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -551,7 +570,7 @@ def test_no_info_file_flag() -> None:
 
 
 def test_main_hides_secret_and_skips_info_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
         return True, None
@@ -567,7 +586,7 @@ def test_main_hides_secret_and_skips_info_file(
     ]
     argv[argv.index("--secret") : argv.index("--secret") + 2] = []
     assert bridge_server.main(argv) == 0
-    out = capsys.readouterr().out
+    out = "\n".join(r.getMessage() for r in caplog.records)
     assert "base URL: http://10.0.0.5:9001/s/<hidden>" in out
     assert "env-secret-99" not in out
     assert "envpw-value" not in out
@@ -589,3 +608,229 @@ def test_healthz_touches_nothing(tmp_path: Path) -> None:
 
 def test_request_log_accepts_dev_null() -> None:
     RequestLog(Path("/dev/null")).write({"req": 1})
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("debug", logging.DEBUG),
+        ("info", logging.INFO),
+        ("warn", logging.WARNING),
+        ("warning", logging.WARNING),
+        ("error", logging.ERROR),
+        ("DEBUG", logging.DEBUG),
+        ("Warn", logging.WARNING),
+        ("  info\t", logging.INFO),
+    ],
+)
+def test_parse_level(value: str, expected: int) -> None:
+    assert parse_level(value) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "verbose", "critical", "10"])
+def test_parse_level_rejects_unknown(bad: str) -> None:
+    with pytest.raises(ConfigError, match="log level must be one of debug, info, warn, error"):
+        parse_level(bad)
+
+
+def test_setup_logging_replaces_its_handler(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    before = len(root.handlers)
+    setup_logging(logging.INFO)
+    setup_logging(logging.DEBUG)
+    added = [h for h in root.handlers if getattr(h, "stream", None) is sys.stdout]
+    assert len(root.handlers) == before + 1
+    assert len(added) == 1
+    assert root.level == logging.DEBUG
+    logging.getLogger("bridge.test").info("hello")
+    assert " INFO bridge.test: hello" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("level", [logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR])
+def test_access_log_is_never_verbose(level: int) -> None:
+    setup_logging(level)
+    assert logging.getLogger("aiohttp.access").level >= logging.WARNING
+
+
+def test_log_level_option_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BRIDGE_LOG_LEVEL", raising=False)
+    assert bridge_server.parse_args([]).log_level == "info"
+    monkeypatch.setenv("BRIDGE_LOG_LEVEL", "")
+    assert bridge_server.parse_args([]).log_level == "info"
+    monkeypatch.setenv("BRIDGE_LOG_LEVEL", "debug")
+    assert bridge_server.parse_args([]).log_level == "debug"
+    assert bridge_server.parse_args(["--log-level", "error"]).log_level == "error"
+
+
+def test_main_invalid_log_level_fails_before_network(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "dan", "password": "pw"}))
+    creds.chmod(0o600)
+
+    def no_network(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("network used")
+
+    monkeypatch.setattr(poc_proxy, "check_navidrome", no_network)
+    argv = [*server_args(tmp_path, creds), "--log-level", "loud"]
+    assert bridge_server.main(argv) == 2
+    assert "error: log level must be one of" in capsys.readouterr().err
+    monkeypatch.setenv("BRIDGE_LOG_LEVEL", "loud")
+    assert bridge_server.main(server_args(tmp_path, creds)) == 2
+
+
+def test_main_applies_log_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "dan", "password": "pw"}))
+    creds.chmod(0o600)
+
+    async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
+        return True, None
+
+    monkeypatch.setattr(poc_proxy, "ping_navidrome", accepted)
+    monkeypatch.setattr(bridge_server.web, "run_app", lambda app, **kw: app.close())
+    assert bridge_server.main([*server_args(tmp_path, creds), "--log-level", "ERROR"]) == 0
+    assert logging.getLogger().level == logging.ERROR
+
+
+def records_of(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == name]
+
+
+def test_audio_request_logs_at_info(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.get("/s/SECRET/range/a.flac")
+        assert await resp.read() == PAYLOAD
+
+    with_bridge(tmp_path, scenario)
+    (record,) = records_of(caplog, "bridge.proxy")
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == (
+        f"#1 GET range a range=None status=200 bytes={len(PAYLOAD)} complete=True"
+    )
+
+
+def test_rejected_audio_request_logs_at_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.get("/s/WRONG/range/a.flac")
+        assert resp.status == 404
+
+    with_bridge(tmp_path, scenario)
+    (record,) = records_of(caplog, "bridge.proxy")
+    assert record.levelno == logging.WARNING
+    assert record.getMessage().startswith("reject reason=secret remote=")
+    assert "WRONG" not in record.getMessage()
+
+
+def test_jukebox_skip_logs_at_info(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        await client.get("/rest/jukeboxControl?action=set&id=a&id=b&u=dan&p=pw")
+        caplog.clear()
+        await client.get("/rest/jukeboxControl?action=skip&index=1&offset=7&u=dan&p=pw")
+
+    with_bridge(tmp_path, scenario)
+    (record,) = records_of(caplog, "bridge.jukebox")
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == "jukebox action=skip index=1 offset=7 ids=0 gain=- mute=-"
+
+
+def test_jukebox_get_and_status_log_at_debug(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        for action in ("get", "status"):
+            await client.get(f"/rest/jukeboxControl?action={action}&u=dan&p=pw")
+
+    caplog.set_level(logging.INFO)
+    with_bridge(tmp_path, scenario)
+    assert not records_of(caplog, "bridge.jukebox")
+    caplog.set_level(logging.DEBUG)
+    with_bridge(tmp_path, scenario)
+    records = records_of(caplog, "bridge.jukebox")
+    assert [r.levelno for r in records] == [logging.DEBUG, logging.DEBUG]
+    assert records[0].getMessage().startswith("jukebox action=get ")
+
+
+def test_jukebox_failing_action_logs_at_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        await client.get("/rest/jukeboxControl?action=set&id=zzz&u=dan&p=pw")
+
+    with_bridge(tmp_path, scenario)
+    (record,) = records_of(caplog, "bridge.jukebox")
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "jukebox action=set failed code=70: song not found: zzz"
+
+
+def test_jukebox_wrong_login_logs_at_info_without_user(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    setup_logging(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        await client.get("/rest/jukeboxControl?action=set&id=a&u=mallory&p=wrong")
+
+    with_bridge(tmp_path, scenario)
+    (record,) = records_of(caplog, "bridge.jukebox")
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == "jukebox rejected login"
+    assert "mallory" not in caplog.text
+
+
+def test_passthrough_failure_logs_without_query(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    setup_logging(logging.DEBUG)
+
+    async def go() -> None:
+        app = build_app(make_config("http://127.0.0.1:1", tmp_path), FakeWiim())
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.get("/api/thing?token=hunter2")
+            assert resp.status == 502
+
+    run(go())
+    (record,) = [r for r in records_of(caplog, "bridge.app") if "passthrough" in r.getMessage()]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage().startswith("passthrough GET /api/thing failed: ")
+    assert "hunter2" not in caplog.text
+
+
+def test_round_trip_logs_contain_no_secrets(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    setup_logging(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        base = "/rest/jukeboxControl"
+        for query in (
+            "action=set&id=a&id=b&u=dan&p=pw",
+            "action=start&u=dan&p=pw",
+            "action=get&u=dan&t=good&s=tokensalt",
+            "action=skip&index=1&u=dan&t=good&s=tokensalt",
+            "action=set&id=a&u=dan&p=wrongpw",
+        ):
+            await client.get(f"{base}?{query}")
+        for path in ("/s/SECRET/range/a.flac", "/s/BADSECRET/range/a.flac"):
+            await (await client.get(path)).read()
+        await client.get("/api/thing?t=good&s=tokensalt")
+
+    with_bridge(tmp_path, scenario)
+    assert caplog.records
+    text = caplog.text
+    for forbidden in ("SECRET", "pw", "abcd", "good", "tokensalt"):
+        assert forbidden not in text, forbidden

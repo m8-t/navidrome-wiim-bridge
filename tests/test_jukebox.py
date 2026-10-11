@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Any
 
@@ -233,6 +234,43 @@ def test_lost_control_unloads() -> None:
     player.calls.clear()
     do(jb, "start")
     assert names(player) == ["load"]
+
+
+def test_lost_control_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player = make()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    caplog.clear()
+    player.override = PlayerStatus(None, False, 0.0, False, "PLAYING")
+    do(jb, "status")
+    (record,) = [r for r in caplog.records if r.name == "bridge.jukebox"]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "lost control of the device queue"
+    do(jb, "status")
+    assert len([r for r in caplog.records if r.name == "bridge.jukebox"]) == 1
+
+
+def test_failure_warning_redacts_query_strings(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    text = "GET http://host/x?u=dan&t=abc123&s=salt failed"
+    jb, player = make()
+    do(jb, "set", ["a"])
+    player.failing["load"] = PlayerError(text)
+
+    async def scenario() -> dict[str, Any]:
+        async with serve(jb) as client:
+            resp = await client.get("/rest/jukeboxControl?action=start&u=dan&p=pw")
+            return await resp.json()  # type: ignore[no-any-return]
+
+    body = run(scenario())
+    assert body["subsonic-response"]["error"] == {"code": 0, "message": text}
+    (record,) = [r for r in caplog.records if r.name == "bridge.jukebox"]
+    assert record.levelno == logging.WARNING
+    message = record.getMessage()
+    assert "?<redacted>" in message
+    for leaked in ("abc123", "salt", "u=dan"):
+        assert leaked not in message
 
 
 def test_clear_only_touches_device_when_loaded() -> None:

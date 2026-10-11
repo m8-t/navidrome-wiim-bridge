@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import itertools
 import json
+import logging
 import re
 import time
 from collections.abc import AsyncIterator, Mapping
@@ -16,6 +17,8 @@ import aiohttp
 from aiohttp import web
 
 from bridge.subsonic import UPSTREAM_HEADERS, subsonic_params
+
+logger = logging.getLogger("bridge.proxy")
 
 PROFILES = ("range", "norange")
 CHUNK_SIZE = 65536
@@ -164,11 +167,17 @@ def end_event(info: RequestInfo, outcome: Outcome) -> dict[str, Any]:
     }
 
 
-def print_end(info: RequestInfo, outcome: Outcome) -> None:
-    print(
-        f"#{info.req} {info.method} {info.profile} {info.song_id} range={info.range_header}"
-        f" status={outcome.status} bytes={outcome.body_bytes} complete={outcome.complete}",
-        flush=True,
+def log_end(info: RequestInfo, outcome: Outcome) -> None:
+    logger.info(
+        "#%d %s %s %s range=%s status=%d bytes=%d complete=%s",
+        info.req,
+        info.method,
+        info.profile,
+        info.song_id,
+        info.range_header,
+        outcome.status,
+        outcome.body_bytes,
+        outcome.complete,
     )
 
 
@@ -193,7 +202,7 @@ def reject(request: web.Request, reason: str) -> web.Response:
         "remote": request.remote,
     }
     request.app[LOG_KEY].write(event)
-    print(f"reject reason={reason} remote={request.remote}", flush=True)
+    logger.warning("reject reason=%s remote=%s", reason, request.remote)
     return web.Response(status=404)
 
 
@@ -306,7 +315,7 @@ async def handle_stream(request: web.Request) -> web.StreamResponse | web.Respon
         return await serve(request, info, outcome)
     finally:
         log.write(end_event(info, outcome))
-        print_end(info, outcome)
+        log_end(info, outcome)
 
 
 async def upstream_session(app: web.Application) -> AsyncIterator[None]:

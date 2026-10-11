@@ -1,7 +1,7 @@
 """Combined bridge service: jukebox endpoint, audio proxy and Navidrome pass-through."""
 
 import json
-import sys
+import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
@@ -16,6 +16,8 @@ from bridge.jukebox import Jukebox, add_jukebox_routes
 from bridge.player import Player
 from bridge.proxy import ProxyConfig, add_proxy_routes
 from bridge.subsonic import UPSTREAM_HEADERS, subsonic_params
+
+logger = logging.getLogger("bridge.app")
 
 AUTH_PARAMS = ("u", "p", "t", "s", "apiKey")
 AUTH_CACHE_SECONDS = 60
@@ -145,8 +147,11 @@ async def passthrough(request: web.Request) -> web.StreamResponse:
                 await resp.write(chunk)
             await resp.write_eof()
             return resp
-    except (ConnectionError, aiohttp.ClientError, TimeoutError):
+    except (ConnectionError, aiohttp.ClientError, TimeoutError) as exc:
         if resp is None or not resp.prepared:
+            logger.warning(
+                "passthrough %s %s failed: %s", request.method, request.path, type(exc).__name__
+            )
             return web.Response(status=502, text="upstream error")
         if request.transport is not None:
             request.transport.close()
@@ -229,7 +234,7 @@ def build_app(
                 await player.clear()
             except (aiohttp.ClientError, TimeoutError, ConnectionError) as exc:
                 message = str(exc) or type(exc).__name__
-                print(f"warning: could not clear the device queue at start: {message}", file=sys.stderr)
+                logger.warning("could not clear the device queue at start: %s", message)
 
         app.on_startup.append(clear_device_queue)
     app[PLAYER_KEY] = player

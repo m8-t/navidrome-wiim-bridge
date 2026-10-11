@@ -1,6 +1,7 @@
 """Run the bridge: jukebox endpoint, audio proxy and Navidrome pass-through in one process."""
 
 import argparse
+import logging
 import os
 import re
 import secrets
@@ -17,8 +18,12 @@ sys.path.insert(0, str(PROJECT_DIR))
 import poc_proxy  # noqa: E402
 
 from bridge.app import BridgeConfig, build_app  # noqa: E402
+from bridge.log import parse_level, setup_logging  # noqa: E402
 from bridge.subsonic import ConfigError, load_credentials  # noqa: E402
 from bridge.wiim import DEFAULT_DEVICE_BASE, DEFAULT_STATUS_URL, Wiim, open_sessions  # noqa: E402
+
+
+logger = logging.getLogger("bridge.server")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -48,6 +53,11 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--max-volume", type=int, default=100, help="volume ceiling, 0 to 100")
     parser.add_argument(
         "--keep-queue-on-start", action="store_true", help="do not clear the device queue at start"
+    )
+    parser.add_argument(
+        "--log-level",
+        default=os.environ.get("BRIDGE_LOG_LEVEL") or "info",
+        help="debug, info, warn or error (default: $BRIDGE_LOG_LEVEL, else info)",
     )
     parser.add_argument("--queue-name", default="bridge", help="name of the device queue")
     return parser.parse_args(argv)
@@ -98,6 +108,7 @@ def make_app_factory(config: BridgeConfig) -> Callable[[], Awaitable[web.Applica
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        setup_logging(parse_level(args.log_level))
         user, password = resolve_credentials(args.credentials, os.environ)
         secret = resolve_secret(args.secret, os.environ)
     except ConfigError as exc:
@@ -112,9 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     base_url = f"http://{args.advertise_host}:{args.port}/s/{secret}"
     if not args.no_info_file:
         poc_proxy.write_info_file(args.info_file, base_url, navidrome_url, args.log)
-    print(f"base URL: {hidden_base_url(args.advertise_host, args.port)}", flush=True)
-    print(f"request log: {args.log}", flush=True)
-    print(f"Feishin server URL: http://{args.advertise_host}:{args.port}", flush=True)
+    logger.info("base URL: %s", hidden_base_url(args.advertise_host, args.port))
+    logger.info("request log: %s", args.log)
+    logger.info("Feishin server URL: http://%s:%d", args.advertise_host, args.port)
     config = BridgeConfig(
         navidrome_url=navidrome_url,
         user=user,
