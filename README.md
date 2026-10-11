@@ -25,6 +25,26 @@ This bridge puts the queue into the WiiM itself and stays in the middle as a sma
 server. The app that started the music can be closed, and the remote works, because the
 device knows what comes next.
 
+## Why not just cast to the WiiM?
+
+Several apps, Feishin's desktop app among them, can cast to a WiiM over DLNA, and that
+also sends the original file. The sound is the same on both paths. What differs is
+where the play queue lives.
+
+| | Casting from an app (DLNA) | Through this bridge |
+|---|---|---|
+| Audio | original file | original file |
+| Where the queue lives | in the app | in the WiiM |
+| Close the app | the music ends with the current track | the music keeps playing |
+| Remote: next | ignored | next track |
+| Remote: previous | restarts the track | previous track |
+| Track changes | a gap of about a second | gapless |
+| Control from a browser or a phone page | no, it needs an app that can speak DLNA | yes |
+
+The left column is what a test with Feishin 1.17.0 and a WiiM Amp Ultra showed. Other
+apps may do better on single points, but as long as the queue stays in the app, the
+device cannot know what comes next.
+
 ## How it works
 
 Three ideas carry the whole thing.
@@ -127,9 +147,10 @@ python tools/bridge_server.py \
 | `--keep-queue-on-start` | do not clear the device queue when the bridge starts |
 | `--log` | file for the log of the device's audio requests |
 | `--no-info-file` | do not write the helper file with the base URL |
+| `--log-level` | `debug`, `info`, `warn` or `error`; default `info` |
 
 Environment variables, meant for containers: `BRIDGE_NAVIDROME_USER`,
-`BRIDGE_NAVIDROME_PASSWORD` (both or neither) and `BRIDGE_SECRET`.
+`BRIDGE_NAVIDROME_PASSWORD` (both or neither), `BRIDGE_SECRET` and `BRIDGE_LOG_LEVEL`.
 
 At start the bridge checks that Navidrome accepts the user and exits if not. It also
 clears its queue on the device, so a restart stops the music.
@@ -158,6 +179,23 @@ login, so treat it like a password.
 
 The value must be at least 8 characters from `A-Z a-z 0-9 _ -`, for example the output
 of `openssl rand -hex 16`. The bridge never prints it.
+
+### Logging
+
+The bridge logs to standard output, one line per event with time, level and source.
+
+| Level | What you see |
+|---|---|
+| `error` | crashes only |
+| `warn` | things that went wrong: a failed command to the device, a lost device queue, an audio request with a wrong path secret, a failed pass-through to Navidrome |
+| `info` | also every command a client sends (`skip`, `start`, `set` and so on) and every track the device fetches |
+| `debug` | also the status polls, which clients send about once a second |
+
+Set it with `--log-level` or `BRIDGE_LOG_LEVEL`. `warn` keeps a healthy bridge silent;
+`info` is the level to switch to when you want to see why something happened.
+
+Passwords, tokens and the path secret are never logged. Web addresses in error
+messages lose everything after the `?`.
 
 ### Container
 
@@ -214,6 +252,11 @@ Things the WiiM does that the code works around, found by testing:
 - While its own queue plays, the device reports an empty `CurrentURI`.
 - It fetches a track with one request for the whole file, and starts fetching the next
   track about 40 seconds before the current one ends.
+
+## Releases
+
+Pushing a tag like `v0.2.0` runs the tests and then builds the image for amd64 and
+arm64 as `ghcr.io/m8-t/navidrome-wiim-bridge:0.2.0`. There is no `latest` tag.
 
 ## Development
 
