@@ -255,8 +255,19 @@ Things the WiiM does that the code works around, found by testing:
 
 ## Releases
 
-Pushing a tag like `v0.2.0` runs the tests and then builds the image for amd64 and
-arm64 as `ghcr.io/m8-t/navidrome-wiim-bridge:0.2.0`. There is no `latest` tag.
+Every version is a [GitHub release](https://github.com/m8-t/navidrome-wiim-bridge/releases)
+with its notes, and an image `ghcr.io/m8-t/navidrome-wiim-bridge:<version>` for amd64
+and arm64. There is no `latest` tag. What changed in each version is in
+[CHANGELOG.md](CHANGELOG.md).
+
+How a release is made:
+
+1. Add a section for the new version to `CHANGELOG.md` and commit it.
+2. Push a tag like `v0.2.1`.
+3. The workflow checks that the changelog has that section, runs the tests, builds the
+   image, and publishes the release with the changelog section as its notes.
+
+A tag without a changelog section fails before anything is built.
 
 ## Development
 
