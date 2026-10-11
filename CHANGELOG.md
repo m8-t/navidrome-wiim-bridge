@@ -30,6 +30,22 @@ Each release is published as a container image:
   a `kustomization.yaml`, and examples for a Secret, an Ingress and a Gateway API route.
 - README: one table of all settings and where each comes from.
 
+### Fixed
+
+- Resuming at a position after a queue reload could still start at 0:00 now and then.
+  Right after a reload the WiiM can report its old state for a moment, including the
+  old position. The bridge took that for the new track, jumped too early, and then read
+  the old position as proof that the jump had worked. It now waits until it has seen
+  the new track near its beginning before it jumps. A position within the first three
+  seconds is not jumped to at all.
+- At `info` level the bridge logs one line for each resume, with the number of jumps
+  it took.
+
+### Removed
+
+- `tools/ma_skip_baseline.py`, a measuring tool for another music server that had
+  nothing to do with the bridge.
+
 ### Upgrading from 0.2
 
 Set `BRIDGE_DEVICE_HOST` and `BRIDGE_ADVERTISE_HOST` (or `--device-host` and
