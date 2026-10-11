@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState,
+  mediaMetadataInit, positionState, swipeAction, swipeTarget,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -195,4 +195,38 @@ test("positionState", () => {
   assert.equal(positionState(5, NaN), null);
   assert.equal(positionState(5, Infinity), null);
   assert.equal(positionState(5, undefined), null);
+});
+
+test("swipeAction", () => {
+  assert.equal(swipeAction(-100, 0, 200, 400), "next");
+  assert.equal(swipeAction(100, 0, 200, 400), "previous");
+  assert.equal(swipeAction(-59, 0, 200, 400), null);
+  assert.equal(swipeAction(-60, 0, 200, 400), "next");
+  assert.equal(swipeAction(60, 0, 200, 400), "previous");
+  assert.equal(swipeAction(10, 100, 200, 400), null);
+  assert.equal(swipeAction(-90, 61, 200, 400), null);
+  assert.equal(swipeAction(-90, 60, 200, 400), null);
+  assert.equal(swipeAction(-90, 59, 200, 400), "next");
+  assert.equal(swipeAction(-100, 0, 801, 400), null);
+  assert.equal(swipeAction(-100, 0, 800, 400), "next");
+  assert.equal(swipeAction(-40, 0, 200, 200), "next");
+  assert.equal(swipeAction(-39, 0, 200, 200), null);
+  assert.equal(swipeAction(-59, 0, 200, 0), null);
+  assert.equal(swipeAction(-60, 0, 200, 0), "next");
+  assert.equal(swipeAction(-59, 0, 200, NaN), null);
+  assert.equal(swipeAction(-60, 0, 200, NaN), "next");
+  assert.equal(swipeAction(NaN, 0, 200, 400), null);
+  assert.equal(swipeAction(-100, NaN, 200, 400), null);
+  assert.equal(swipeAction(-100, 0, NaN, 400), null);
+});
+
+test("swipeTarget", () => {
+  assert.equal(swipeTarget("next", 2, 5), 3);
+  assert.equal(swipeTarget("next", 4, 5), null);
+  assert.equal(swipeTarget("previous", 2, 5), 1);
+  assert.equal(swipeTarget("previous", 0, 5), null);
+  assert.equal(swipeTarget("next", 0, 0), null);
+  assert.equal(swipeTarget("previous", 3, 0), null);
+  assert.equal(swipeTarget("sideways", 2, 5), null);
+  assert.equal(swipeTarget(null, 2, 5), null);
 });

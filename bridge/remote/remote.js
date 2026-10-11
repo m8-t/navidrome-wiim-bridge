@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState,
@@ -12,6 +12,8 @@ const HIDDEN_POLL_MS = 3000;
 const TICK_MS = 500;
 const GAIN_HOLD_MS = 1500;
 const STATUS_MS = 4000;
+const SWIPE_FEEDBACK_PX = 8;
+const SWIPE_DAMPING = 0.5;
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) => $(`icon-${name}`).content.cloneNode(true);
@@ -398,7 +400,47 @@ function seekTo(seconds) {
   runCommands([{ action: "skip", index: status.currentIndex, offset: Math.floor(target) }]);
 }
 
+function bindCoverSwipe() {
+  const wrap = $("cover-wrap");
+  const covers = [$("cover"), $("cover-ph")];
+  let start = null;
+  const shift = (px) => {
+    for (const node of covers) node.style.transform = px ? `translateX(${px}px)` : "";
+  };
+  const reset = () => {
+    start = null;
+    wrap.classList.remove("swiping");
+    shift(0);
+  };
+  wrap.addEventListener("pointerdown", (event) => {
+    if (start || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    start = { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp };
+    wrap.setPointerCapture(event.pointerId);
+  });
+  wrap.addEventListener("pointermove", (event) => {
+    if (!start || event.pointerId !== start.id) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < SWIPE_FEEDBACK_PX || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
+    wrap.classList.add("swiping");
+    shift(dx * SWIPE_DAMPING);
+  });
+  wrap.addEventListener("pointerup", (event) => {
+    if (!start || event.pointerId !== start.id) return;
+    const action = swipeAction(
+      event.clientX - start.x, event.clientY - start.y, event.timeStamp - start.t, wrap.clientWidth,
+    );
+    reset();
+    const index = swipeTarget(action, status.currentIndex, entries.length);
+    if (index !== null) runCommands([{ action: "skip", index, offset: 0 }]);
+  });
+  wrap.addEventListener("pointercancel", (event) => {
+    if (start && event.pointerId === start.id) reset();
+  });
+}
+
 function bindPlayer() {
+  bindCoverSwipe();
   $("play").addEventListener("click", togglePlay);
   $("mini-play").addEventListener("click", togglePlay);
   $("prev").addEventListener("click", goPrevious);

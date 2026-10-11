@@ -148,6 +148,14 @@ body.in-app.has-mini .status { bottom: calc(var(--inset-b) + var(--tabbar-h) + v
   width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); object-fit: cover;
   border-radius: var(--radius); background: var(--raised); box-shadow: 0 12px 40px rgb(0 0 0 / 0.5);
 }
+/* manipulation lets iOS claim horizontal pans and cancel the swipe; pan-y leaves them to the page */
+.cover-wrap, .cover-wrap * { touch-action: pan-y; }
+.cover {
+  -webkit-user-drag: none; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none;
+  transition: transform 0.2s ease-out;
+}
+.cover-wrap.swiping .cover { transition: none; }
+@media (prefers-reduced-motion: reduce) { .cover { transition: none; } }
 .cover-ph { display: grid; place-items: center; color: var(--dim); }
 .cover-ph .ic { width: 30%; height: 30%; }
 .info { display: grid; gap: 4px; grid-template-columns: minmax(0, 1fr); }

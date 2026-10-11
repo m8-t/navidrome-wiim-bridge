@@ -26,6 +26,29 @@ export function nextTarget(index, length) {
   return index + 1 >= length ? null : index + 1;
 }
 
+const SWIPE_MIN_PX = 60;
+const SWIPE_MIN_FRACTION = 0.2;
+const SWIPE_HORIZONTAL_RATIO = 1.5;
+const SWIPE_MAX_MS = 800;
+
+export function swipeAction(dx, dy, dtMs, width) {
+  if (![dx, dy, dtMs].every(Number.isFinite)) return null;
+  const threshold = Number.isFinite(width) && width > 0
+    ? Math.min(SWIPE_MIN_PX, width * SWIPE_MIN_FRACTION)
+    : SWIPE_MIN_PX;
+  if (Math.abs(dx) < threshold) return null;
+  if (!(Math.abs(dx) > SWIPE_HORIZONTAL_RATIO * Math.abs(dy))) return null;
+  if (dtMs > SWIPE_MAX_MS) return null;
+  return dx < 0 ? "next" : "previous";
+}
+
+export function swipeTarget(action, index, length) {
+  if (!(length > 0)) return null;
+  if (action === "next") return nextTarget(index, length);
+  if (action === "previous") return index <= 0 ? null : index - 1;
+  return null;
+}
+
 export function chunk(ids, size = 50) {
   if (!(size >= 1)) throw new RangeError("size must be at least 1");
   const out = [];
