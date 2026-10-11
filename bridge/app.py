@@ -1,6 +1,7 @@
 """Combined bridge service: jukebox endpoint, audio proxy and Navidrome pass-through."""
 
 import json
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
@@ -50,6 +51,7 @@ class BridgeConfig:
     queue_name: str = "bridge"
     profile: str = "range"
     max_volume: int = 100
+    clear_on_start: bool = True
 
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
@@ -197,6 +199,16 @@ def build_app(
         wiim, lambda sid: stream_url(config, sid), config.queue_name, config.max_volume
     )
     jukebox = Jukebox(player, lookup)
+    if config.clear_on_start:
+
+        async def clear_device_queue(app: web.Application) -> None:
+            try:
+                await player.clear()
+            except (aiohttp.ClientError, TimeoutError, ConnectionError) as exc:
+                message = str(exc) or type(exc).__name__
+                print(f"warning: could not clear the device queue at start: {message}", file=sys.stderr)
+
+        app.on_startup.append(clear_device_queue)
     app[PLAYER_KEY] = player
     app[JUKEBOX_KEY] = jukebox
     add_jukebox_routes(app, jukebox, authenticate)

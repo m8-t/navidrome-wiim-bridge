@@ -247,7 +247,7 @@ def test_passthrough_forwards_request_and_response(tmp_path: Path) -> None:
         resp = await client.get("/rest/ping.view?u=dan&p=pw")
         assert (await resp.json())["subsonic-response"]["status"] == "ok"
         assert fake.requests[-1]["path"] == "/rest/ping.view"
-        assert wiim.calls == []
+        assert [name for name, _ in wiim.calls] == ["stop", "queue_delete"]
 
     with_bridge(tmp_path, scenario)
 
@@ -388,3 +388,74 @@ def test_bridge_server_max_volume_option(
     argv = [*server_args(tmp_path, creds), "--max-volume", "70"]
     assert bridge_server.main(argv) == 0
     assert captured["config"].max_volume == 70
+
+
+async def _start_and_ping(config: BridgeConfig, wiim: FakeWiim) -> int:
+    async with TestClient(TestServer(build_app(config, wiim))) as client:
+        resp = await client.get("/rest/jukeboxControl?action=status&u=dan&p=pw")
+        return resp.status
+
+
+def _run_started(tmp_path: Path, wiim: FakeWiim, **changes: Any) -> int:
+    async def go() -> int:
+        fake = FakeNavidrome()
+        async with TestServer(fake.app) as server:
+            base = make_config(str(server.make_url("")).rstrip("/"), tmp_path)
+            return await _start_and_ping(dataclasses.replace(base, **changes), wiim)
+
+    return int(run(go()))
+
+
+def test_startup_clears_device_queue_once(tmp_path: Path) -> None:
+    wiim = FakeWiim()
+    assert _run_started(tmp_path, wiim) == 200
+    names = [name for name, _ in wiim.calls]
+    assert names[:2] == ["stop", "queue_delete"]
+    assert names.count("stop") == 1
+    assert names.count("queue_delete") == 1
+
+
+def test_clear_on_start_can_be_disabled(tmp_path: Path) -> None:
+    wiim = FakeWiim()
+    _run_started(tmp_path, wiim, clear_on_start=False)
+    names = [name for name, _ in wiim.calls]
+    assert "stop" not in names
+    assert "queue_delete" not in names
+
+
+def test_unreachable_device_does_not_block_startup(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Unreachable(FakeWiim):
+        async def stop(self) -> str:
+            raise aiohttp.ClientConnectionError("device down")
+
+    assert _run_started(tmp_path, Unreachable()) == 200
+    err = capsys.readouterr().err
+    assert "warning: could not clear the device queue at start: device down" in err
+
+
+def test_bridge_server_keep_queue_option(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "dan", "password": "pw"}))
+    creds.chmod(0o600)
+    captured: list[BridgeConfig] = []
+
+    async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
+        return True, None
+
+    def fake_factory(config: BridgeConfig) -> Callable[[], Awaitable[None]]:
+        captured.append(config)
+
+        async def factory() -> None:
+            return None
+
+        return factory
+
+    monkeypatch.setattr(poc_proxy, "ping_navidrome", accepted)
+    monkeypatch.setattr(bridge_server, "make_app_factory", fake_factory)
+    monkeypatch.setattr(bridge_server.web, "run_app", lambda coro, **kw: coro.close())
+    base = server_args(tmp_path, creds)
+    assert bridge_server.main(base) == 0
+    assert bridge_server.main([*base, "--keep-queue-on-start"]) == 0
+    assert [c.clear_on_start for c in captured] == [True, False]

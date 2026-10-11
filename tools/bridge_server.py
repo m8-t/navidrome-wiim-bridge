@@ -41,6 +41,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--device-base", default=DEFAULT_DEVICE_BASE, help="WiiM UPnP base URL")
     parser.add_argument("--status-url", default=DEFAULT_STATUS_URL, help="WiiM status API URL")
     parser.add_argument("--max-volume", type=int, default=100, help="volume ceiling, 0 to 100")
+    parser.add_argument(
+        "--keep-queue-on-start", action="store_true", help="do not clear the device queue at start"
+    )
     parser.add_argument("--queue-name", default="bridge", help="name of the device queue")
     return parser.parse_args(argv)
 
@@ -93,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         status_url=args.status_url,
         queue_name=args.queue_name,
         max_volume=args.max_volume,
+        clear_on_start=not args.keep_queue_on_start,
     )
     web.run_app(make_app_factory(config)(), host=args.bind, port=args.port, print=None)
     return 0
