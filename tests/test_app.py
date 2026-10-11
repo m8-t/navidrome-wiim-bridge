@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import gzip
 import json
 import os
@@ -342,3 +343,48 @@ def test_bridge_server_rejects_open_credentials(
     os.chmod(creds, 0o644)
     assert bridge_server.main(server_args(tmp_path, creds)) == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_max_volume_reaches_the_player(tmp_path: Path) -> None:
+    wiim = FakeWiim()
+
+    async def go() -> None:
+        fake = FakeNavidrome()
+        async with TestServer(fake.app) as server:
+            config = dataclasses.replace(
+                make_config(str(server.make_url("")).rstrip("/"), tmp_path), max_volume=70
+            )
+            async with TestClient(TestServer(build_app(config, wiim))) as client:
+                resp = await client.get("/rest/jukeboxControl?action=setGain&gain=0.9&u=dan&p=pw")
+                body = (await resp.json())["subsonic-response"]
+                assert body["jukeboxStatus"]["gain"] == 0.7
+
+    run(go())
+    assert ("set_volume", (70,)) in wiim.calls
+
+
+def test_bridge_server_max_volume_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "dan", "password": "pw"}))
+    creds.chmod(0o600)
+    captured: dict[str, Any] = {}
+
+    async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
+        return True, None
+
+    def fake_factory(config: BridgeConfig) -> Callable[[], Awaitable[None]]:
+        captured["config"] = config
+
+        async def factory() -> None:
+            return None
+
+        return factory
+
+    monkeypatch.setattr(poc_proxy, "ping_navidrome", accepted)
+    monkeypatch.setattr(bridge_server, "make_app_factory", fake_factory)
+    monkeypatch.setattr(bridge_server.web, "run_app", lambda coro, **kw: coro.close())
+    argv = [*server_args(tmp_path, creds), "--max-volume", "70"]
+    assert bridge_server.main(argv) == 0
+    assert captured["config"].max_volume == 70

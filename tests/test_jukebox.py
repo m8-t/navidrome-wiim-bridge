@@ -31,6 +31,8 @@ class FakePlayer:
         self.is_playing = False
         self.override: PlayerStatus | None = None
         self.failing: dict[str, Exception] = {}
+        self.volume: int | None = None
+        self.ceiling = 100
 
     def _rec(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -62,6 +64,11 @@ class FakePlayer:
         self._rec("resume")
         self.is_playing = True
 
+    async def set_volume(self, volume: int) -> int:
+        clamped = min(max(volume, 0), self.ceiling)
+        self._rec("set_volume", clamped)
+        return clamped
+
     async def clear(self) -> None:
         self._rec("clear")
         self.idx, self.is_playing = None, False
@@ -69,7 +76,7 @@ class FakePlayer:
     async def refresh(self) -> PlayerStatus:
         if self.override is not None:
             return self.override
-        return PlayerStatus(self.idx, self.is_playing, 0.0, True, None)
+        return PlayerStatus(self.idx, self.is_playing, 0.0, True, None, self.volume)
 
 
 async def lookup(song_id: str) -> Mapping[str, Any] | None:
@@ -349,3 +356,26 @@ def test_http_parameter_errors_and_options() -> None:
                 assert resp.headers["Access-Control-Allow-Headers"] == "*"
 
     run(scenario())
+
+
+def test_set_gain_sets_device_volume() -> None:
+    jb, player = make()
+    status = do(jb, "setGain", gain=0.3)["jukeboxStatus"]
+    assert ("set_volume", (30,)) in player.calls
+    assert status["gain"] == 0.3
+
+
+def test_set_gain_reports_the_clamped_volume() -> None:
+    jb, player = make()
+    player.ceiling = 60
+    assert do(jb, "setGain", gain=0.9)["jukeboxStatus"]["gain"] == 0.6
+
+
+def test_status_picks_up_volume_changed_on_the_remote() -> None:
+    jb, player = make()
+    do(jb, "set", ["a"])
+    player.volume = 41
+    status = do(jb, "status")["jukeboxStatus"]
+    assert status["gain"] == 0.41
+    assert status["playing"] is False
+    assert "load" not in names(player)

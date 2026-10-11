@@ -51,6 +51,9 @@ class FakeWiim:
     async def queue_move(self, name: str, index: int, to_index: int) -> str:
         return await self._record("queue_move", name, index, to_index)
 
+    async def set_volume(self, volume: int) -> str:
+        return await self._record("set_volume", volume)
+
     async def pause(self) -> str:
         return await self._record("pause")
 
@@ -325,3 +328,24 @@ def test_load_failure_resets_a_loaded_player() -> None:
         run(player.load([tr("x")], play=False))
     assert player.tracks == ()
     assert not player.in_control
+
+
+def test_set_volume_clamps_to_ceiling() -> None:
+    fake = FakeWiim()
+    player = Player(fake, url_for)  # type: ignore[arg-type]
+    assert run(player.set_volume(150)) == 100
+    assert run(player.set_volume(-5)) == 0
+    limited = Player(fake, url_for, max_volume=60)  # type: ignore[arg-type]
+    assert run(limited.set_volume(80)) == 60
+    assert [args for name, args in fake.calls if name == "set_volume"] == [(100,), (0,), (60,)]
+    with pytest.raises(ValueError):
+        Player(fake, url_for, max_volume=101)  # type: ignore[arg-type]
+
+
+def test_refresh_reports_volume_without_control() -> None:
+    fake = FakeWiim()
+    state_with(fake, volume=33)
+    player = Player(fake, url_for)  # type: ignore[arg-type]
+    status = run(player.refresh())
+    assert not status.in_control
+    assert status.volume == 33

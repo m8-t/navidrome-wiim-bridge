@@ -27,6 +27,7 @@ from bridge.wiim import (
     CONTROL_PATH,
     PLAYQUEUE_CONTROL_PATH,
     PLAYQUEUE_SERVICE,
+    RENDERING_CONTROL_PATH,
     DeviceState,
     QueueTrack,
     Wiim,
@@ -42,6 +43,7 @@ from wiim_ctl import (
     InputError,
     build_parser,
     cmd_queue_create,
+    cmd_volume,
     queue_context_from_args,
 )
 
@@ -296,8 +298,11 @@ def _fake_device_app(
     content_types: list[str],
     queue_calls: list[tuple[str, str]] | None = None,
     queue_index_fails: bool = False,
+    render_calls: list[tuple[str, str]] | None = None,
+    status_text: str = PLAYER_STATUS,
 ) -> web.Application:
     recorded_queue = queue_calls if queue_calls is not None else []
+    recorded_render = render_calls if render_calls is not None else []
 
     async def control(request: web.Request) -> web.Response:
         header = request.headers["SOAPACTION"]
@@ -326,12 +331,17 @@ def _fake_device_app(
             return web.Response(text=BROWSE_BODY, content_type="text/xml")
         return web.Response(text="<s:Envelope/>", content_type="text/xml")
 
+    async def render_control(request: web.Request) -> web.Response:
+        recorded_render.append((request.headers["SOAPACTION"], await request.text()))
+        return web.Response(text="<s:Envelope/>", content_type="text/xml")
+
     async def status(request: web.Request) -> web.Response:
-        return web.Response(text=PLAYER_STATUS, content_type="text/plain")
+        return web.Response(text=status_text, content_type="text/plain")
 
     app = web.Application()
     app.router.add_post(CONTROL_PATH, control)
     app.router.add_post(PLAYQUEUE_CONTROL_PATH, queue_control)
+    app.router.add_post(RENDERING_CONTROL_PATH, render_control)
     app.router.add_get("/httpapi.asp", status)
     return app
 
@@ -340,12 +350,17 @@ def _run_against_fake_device(
     scenario: Callable[[Wiim], Awaitable[T]],
     queue_calls: list[tuple[str, str]] | None = None,
     queue_index_fails: bool = False,
+    render_calls: list[tuple[str, str]] | None = None,
+    status_text: str = PLAYER_STATUS,
 ) -> tuple[T, list[tuple[str, str]], list[str]]:
     calls: list[tuple[str, str]] = []
     content_types: list[str] = []
 
     async def go() -> T:
-        async with TestServer(_fake_device_app(calls, content_types, queue_calls, queue_index_fails)) as server:
+        async with TestServer(_fake_device_app(
+                calls, content_types, queue_calls, queue_index_fails, render_calls, status_text
+            )
+        ) as server:
             base = f"http://{server.host}:{server.port}"
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
                 wiim = Wiim(
@@ -713,3 +728,59 @@ def test_wiim_queue_insert() -> None:
     )
     _, playing = _queue_call_body(lambda w: w.queue_insert(context, 2, play=True))
     assert "<Play>1</Play>" in playing
+
+
+def test_wiim_set_volume() -> None:
+    render_calls: list[tuple[str, str]] = []
+
+    async def scenario(wiim: Wiim) -> None:
+        await wiim.set_volume(40)
+
+    _run_against_fake_device(scenario, render_calls=render_calls)
+    header, body = render_calls[0]
+    assert header == '"urn:schemas-upnp-org:service:RenderingControl:1#SetVolume"'
+    assert "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>40</DesiredVolume>" in body
+
+    async def invalid(wiim: Wiim) -> None:
+        for bad in (101, -1):
+            with pytest.raises(ValueError):
+                await wiim.set_volume(bad)
+
+    render_calls.clear()
+    _run_against_fake_device(invalid, render_calls=render_calls)
+    assert render_calls == []
+
+
+def test_wiim_state_reports_volume_and_mute() -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.state()
+
+    state, _, _ = _run_against_fake_device(scenario)
+    assert state.volume == 27
+    assert state.muted is False
+
+    without = PLAYER_STATUS.replace('"vol":"27",', "").replace('"mute":"0"', '"mute":"x"')
+    state, _, _ = _run_against_fake_device(scenario, status_text=without)
+    assert state.volume is None
+    assert state.muted is None
+
+
+def test_describe_change_volume() -> None:
+    prev = _state()
+    cur = DeviceState(**{**prev.__dict__, "volume": 30})
+    prev = DeviceState(**{**prev.__dict__, "volume": 27})
+    assert describe_change(prev, cur) == "volume 27->30"
+
+
+def test_volume_command_sends_set_volume() -> None:
+    render_calls: list[tuple[str, str]] = []
+    args = build_parser().parse_args(["volume", "--set", "20"])
+
+    async def scenario(wiim: Wiim) -> dict[str, object]:
+        return await cmd_volume(wiim, args)
+
+    result, _, _ = _run_against_fake_device(scenario, render_calls=render_calls)
+    assert len(render_calls) == 1
+    assert "<DesiredVolume>20</DesiredVolume>" in render_calls[0][1]
+    assert result["action"] == "volume"
+    assert result["volume"] == 20

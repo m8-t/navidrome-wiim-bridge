@@ -69,6 +69,8 @@ async def cmd_state(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
         "api_status": state.api_status,
         "curpos_ms": state.curpos_ms,
         "queue_index": state.queue_index,
+        "volume": state.volume,
+        "muted": state.muted,
         **position,
     }
 
@@ -104,6 +106,13 @@ def _simple_command(name: str, method: str) -> Handler:
         return {"action": name, "t_start": t0, "ms": (t1 - t0) * 1000}
 
     return run
+
+
+async def cmd_volume(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
+    t0 = time.time()
+    await wiim.set_volume(args.set)
+    t1 = time.time()
+    return {"action": "volume", "volume": args.set, "t_start": t0, "ms": (t1 - t0) * 1000}
 
 
 async def cmd_seek(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
@@ -243,6 +252,7 @@ def _record_sample(handle: Any, prev: DeviceState | None, cur: DeviceState) -> N
             "api_status": cur.api_status,
             "curpos_ms": cur.curpos_ms,
             "queue_index": cur.queue_index,
+            "volume": cur.volume,
         },
     )
     change = describe_change(prev, cur)
@@ -264,6 +274,7 @@ COMMANDS: dict[str, Handler] = {
     "next": _simple_command("next", "next"),
     "previous": _simple_command("previous", "previous"),
     "seek": cmd_seek,
+    "volume": cmd_volume,
     "queue-create": cmd_queue_create,
     "queue-play": cmd_queue_play,
     "queue-index": cmd_queue_index,
@@ -316,6 +327,8 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_parser(name)
     seek = sub.add_parser("seek", help="seek to an absolute position")
     seek.add_argument("--seconds", type=int, required=True)
+    volume = sub.add_parser("volume", help="set the device volume")
+    volume.add_argument("--set", type=int, required=True)
     watch = sub.add_parser("watch", help="record device state to a JSON lines file")
     watch.add_argument("--seconds", type=int, required=True)
     watch.add_argument("--out", required=True)

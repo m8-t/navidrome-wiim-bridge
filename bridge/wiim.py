@@ -28,6 +28,8 @@ CONTROL_PATH = "/upnp/control/rendertransport1"
 DEFAULT_STATUS_URL = "https://172.16.20.211/httpapi.asp?command=getPlayerStatus"
 PLAYQUEUE_CONTROL_PATH = "/upnp/control/PlayQueue1"
 PLAYQUEUE_SERVICE = "urn:schemas-wiimu-com:service:PlayQueue:1"
+RENDERING_CONTROL_PATH = "/upnp/control/rendercontrol1"
+RENDERING_SERVICE = "urn:schemas-upnp-org:service:RenderingControl:1"
 
 SENSITIVE_PARAMS = frozenset({"u", "t", "s", "p", "c", "apikey", "token"})
 JUMP_TOLERANCE_MS = 1500
@@ -172,6 +174,8 @@ class DeviceState:
     api_status: str | None
     curpos_ms: int | None
     queue_index: int | None = None
+    volume: int | None = None
+    muted: bool | None = None
 
 
 def _position_jumped(prev: DeviceState, cur: DeviceState) -> bool:
@@ -195,11 +199,28 @@ def describe_change(prev: DeviceState | None, cur: DeviceState) -> str | None:
         parts.append("next_uri changed")
     if prev.queue_index != cur.queue_index:
         parts.append(f"queue_index {prev.queue_index}->{cur.queue_index}")
+    if prev.volume != cur.volume:
+        parts.append(f"volume {prev.volume}->{cur.volume}")
     if prev.api_status != cur.api_status:
         parts.append(f"api_status {prev.api_status}->{cur.api_status}")
     if _position_jumped(prev, cur):
         parts.append(f"position jump {prev.curpos_ms}->{cur.curpos_ms}")
     return "; ".join(parts) or None
+
+
+@dataclass(frozen=True)
+class ApiStatus:
+    status: str | None = None
+    curpos_ms: int | None = None
+    volume: int | None = None
+    muted: bool | None = None
+
+
+def _parse_volume(raw: object) -> int | None:
+    try:
+        return int(str(raw))
+    except ValueError:
+        return None
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -342,19 +363,31 @@ class Wiim:
         except (UpnpError, *REQUEST_ERRORS):
             return None
 
-    async def _api_status(self) -> tuple[str | None, int | None]:
+    async def set_volume(self, volume: int) -> str:
+        if not 0 <= volume <= 100:
+            raise ValueError("volume must be between 0 and 100")
+        return await self.call(
+            "SetVolume",
+            {"InstanceID": "0", "Channel": "Master", "DesiredVolume": str(volume)},
+            RENDERING_SERVICE,
+            RENDERING_CONTROL_PATH,
+        )
+
+    async def _api_status(self) -> ApiStatus:
         try:
             async with self._status_session.get(self._status_url, ssl=False) as resp:
                 resp.raise_for_status()
                 payload = json.loads(await resp.text())
         except (*REQUEST_ERRORS, ValueError):
-            return None, None
+            return ApiStatus()
         if not isinstance(payload, dict):
-            return None, None
+            return ApiStatus()
         status = payload.get("status")
-        return (
-            str(status) if status is not None else None,
-            _parse_curpos(payload.get("curpos")),
+        return ApiStatus(
+            status=str(status) if status is not None else None,
+            curpos_ms=_parse_curpos(payload.get("curpos")),
+            volume=_parse_volume(payload.get("vol")),
+            muted={"1": True, "0": False}.get(str(payload.get("mute"))),
         )
 
     async def state(self) -> DeviceState:
@@ -367,15 +400,17 @@ class Wiim:
             ("CurrentURI", "NextURI"),
         )
         queue_index = await self._current_queue_index()
-        api_status, curpos_ms = await self._api_status()
+        api = await self._api_status()
         return DeviceState(
             t=time.time(),
             transport=transport["CurrentTransportState"],
             current_uri=_blank_to_none(media["CurrentURI"]),
             next_uri=_blank_to_none(media["NextURI"]),
-            api_status=api_status,
-            curpos_ms=curpos_ms,
+            api_status=api.status,
+            curpos_ms=api.curpos_ms,
             queue_index=queue_index,
+            volume=api.volume,
+            muted=api.muted,
         )
 
     async def position(self) -> dict[str, str | None]:

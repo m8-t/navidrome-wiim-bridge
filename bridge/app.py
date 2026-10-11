@@ -49,6 +49,7 @@ class BridgeConfig:
     status_url: str
     queue_name: str = "bridge"
     profile: str = "range"
+    max_volume: int = 100
 
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
@@ -192,7 +193,9 @@ def build_app(
     async def authenticate(params: Mapping[str, str]) -> bool:
         return await app[NAVIDROME_KEY].check_caller(params)
 
-    player = Player(wiim, lambda sid: stream_url(config, sid), config.queue_name)
+    player = Player(
+        wiim, lambda sid: stream_url(config, sid), config.queue_name, config.max_volume
+    )
     jukebox = Jukebox(player, lookup)
     app[PLAYER_KEY] = player
     app[JUKEBOX_KEY] = jukebox

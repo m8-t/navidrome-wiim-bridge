@@ -30,12 +30,20 @@ class PlayerStatus:
     position_s: float
     in_control: bool
     transport: str | None
+    volume: int | None = None
 
 
 class Player:
     def __init__(
-        self, wiim: Wiim, url_for: Callable[[str], str], queue_name: str = "bridge"
+        self,
+        wiim: Wiim,
+        url_for: Callable[[str], str],
+        queue_name: str = "bridge",
+        max_volume: int = 100,
     ) -> None:
+        if not 0 <= max_volume <= 100:
+            raise ValueError("max_volume must be between 0 and 100")
+        self._max_volume = max_volume
         self._wiim = wiim
         self._url_for = url_for
         self._queue_name = queue_name
@@ -163,6 +171,11 @@ class Player:
             raise ValueError("seconds must not be negative")
         await self._wiim.seek(seconds)
 
+    async def set_volume(self, volume: int) -> int:
+        clamped = min(max(volume, 0), self._max_volume)
+        await self._wiim.set_volume(clamped)
+        return clamped
+
     async def clear(self) -> None:
         try:
             await self._wiim.stop()
@@ -196,4 +209,5 @@ class Player:
             position_s=(s.curpos_ms or 0) / 1000 if ours else 0.0,
             in_control=self._in_control,
             transport=s.transport,
+            volume=s.volume,
         )

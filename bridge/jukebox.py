@@ -116,9 +116,11 @@ class Jukebox:
         return [track_from_song(song) for song in self.songs]
 
     async def _sync(self) -> None:
+        status = await self._player.refresh()
+        if status.volume is not None:
+            self.gain = status.volume / 100
         if not self.loaded:
             return
-        status = await self._player.refresh()
         if not status.in_control:
             self.loaded = False
             self.playing = False
@@ -231,7 +233,8 @@ class Jukebox:
     ) -> None:
         if gain is None:
             raise JukeboxError(10, "Required parameter is missing: gain")
-        self.gain = min(max(gain, 0.0), 1.0)
+        clamped = min(max(gain, 0.0), 1.0)
+        self.gain = await self._player.set_volume(round(clamped * 100)) / 100
 
 
 def _parse_int(params: Mapping[str, str], name: str) -> int | None:
