@@ -8,6 +8,19 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.4.1] - 2026-10-11
+
+### Fixed
+
+- Phone page on Safari: the play/pause icon in the player and in the mini player, and
+  the mute icon, were invisible. The buttons worked, they just showed nothing. When the
+  page swapped such an icon it dropped the wrapper that gives the icon its size; other
+  browsers drew the icon anyway, Safari did not.
+- Lock screen controls on iPhone showed "10 seconds back" and "10 seconds forward" in
+  place of previous and next track. The phone shows only one of the two pairs and
+  prefers the jumps when both are offered, so the page no longer offers the jumps.
+  Seeking with the lock screen's progress bar still works.
+
 ## [0.4.0] - 2026-10-11
 
 ### Added
@@ -135,6 +148,7 @@ First version. Published as an image only; there is no git tag for it.
 - Container support: credentials and path secret from environment variables,
   `/healthz`, a Dockerfile.
 
+[0.4.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.1
 [0.4.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.0
 [0.3.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.3.0
 [0.2.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.2.1
