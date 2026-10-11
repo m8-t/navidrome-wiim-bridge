@@ -230,7 +230,7 @@ async def send(
         outcome.complete = True
         if digest is not None:
             outcome.sha256 = digest.hexdigest()
-    except (ConnectionResetError, aiohttp.ClientError, TimeoutError):
+    except (ConnectionError, aiohttp.ClientError, TimeoutError):
         if request.transport is not None:
             request.transport.close()
     return resp

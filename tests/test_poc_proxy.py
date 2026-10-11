@@ -473,6 +473,35 @@ def test_truncated_upstream_is_logged_incomplete(tmp_path: Path) -> None:
     assert end["sha256"] is None
 
 
+def test_connection_lost_during_write_is_handled_quietly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    original = web.StreamResponse.write
+    writes = 0
+
+    async def failing_write(self: web.StreamResponse, data: bytes) -> None:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise ConnectionError("Connection lost")
+        await original(self, data)
+
+    monkeypatch.setattr(web.StreamResponse, "write", failing_write)
+
+    async def scenario() -> Rig:
+        async with rig(tmp_path) as r:
+            resp = await r.client.get(url("range", "abc.flac"))
+            with pytest.raises(aiohttp.ClientError):
+                await resp.read()
+            await asyncio.sleep(0.2)
+            return r
+
+    end = drive(scenario()).event("end")
+    assert end["complete"] is False
+    assert end["sha256"] is None
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
 async def ping_against(handler: Any) -> tuple[bool, str | None]:
     app = web.Application()
     app.router.add_get("/rest/ping", handler)

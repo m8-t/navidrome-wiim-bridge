@@ -8,6 +8,7 @@ from typing import Any
 
 import bridge_server
 import poc_proxy
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -137,8 +138,6 @@ def with_client(
     scenario: Callable[[NavidromeClient, FakeNavidrome], Awaitable[None]],
     clock: Callable[[], float] = lambda: 0.0,
 ) -> None:
-    import aiohttp
-
     async def go() -> None:
         fake = FakeNavidrome()
         async with TestServer(fake.app) as server, aiohttp.ClientSession() as session:
@@ -260,6 +259,24 @@ def test_passthrough_keeps_compressed_bytes(tmp_path: Path) -> None:
         assert await resp.read() == GZ_BODY
 
     with_bridge(tmp_path, scenario, auto_decompress=False)
+
+
+def test_passthrough_connection_lost_during_write_is_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def failing_write(self: web.StreamResponse, data: bytes) -> None:
+        raise ConnectionError("Connection lost")
+
+    monkeypatch.setattr(web.StreamResponse, "write", failing_write)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        with pytest.raises(aiohttp.ClientError):
+            resp = await client.get("/rest/stream?id=a")
+            await resp.read()
+        await asyncio.sleep(0.2)
+
+    with_bridge(tmp_path, scenario)
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
 
 
 def test_passthrough_upstream_unreachable(tmp_path: Path) -> None:

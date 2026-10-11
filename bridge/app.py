@@ -142,7 +142,7 @@ async def passthrough(request: web.Request) -> web.StreamResponse:
                 await resp.write(chunk)
             await resp.write_eof()
             return resp
-    except (ConnectionResetError, aiohttp.ClientError, TimeoutError):
+    except (ConnectionError, aiohttp.ClientError, TimeoutError):
         if resp is None or not resp.prepared:
             return web.Response(status=502, text="upstream error")
         if request.transport is not None:
