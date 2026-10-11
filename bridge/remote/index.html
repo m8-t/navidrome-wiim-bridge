@@ -24,6 +24,7 @@
 <div id="app" class="app" hidden>
   <section id="tab-player" class="tab player" data-tab="player">
     <div class="backdrop" aria-hidden="true"><img id="backdrop" alt="" hidden></div>
+    <button id="open-settings" type="button" class="round r44 plain settings-btn" aria-label="Settings" title="Settings"><span class="ic" data-icon="settings"></span></button>
     <div class="player-inner">
       <div id="player-main" class="player-main">
         <div class="cover-wrap">
@@ -77,7 +78,6 @@
         <input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off">
         <button id="search-clear" type="button" class="round r44 plain" aria-label="Clear search" title="Clear search" hidden><span class="ic" data-icon="close"></span></button>
       </div>
-      <button id="open-settings" type="button" class="round r44 plain" aria-label="Settings" title="Settings"><span class="ic" data-icon="settings"></span></button>
     </div>
     <div id="library-list" class="scroll"></div>
     <div id="album-view" class="album-view scroll" hidden>
@@ -184,7 +184,7 @@
 <template id="icon-close"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg></template>
 <template id="icon-plus"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg></template>
 <template id="icon-back"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M14.6 4.6L16 6l-6 6 6 6-1.4 1.4L7.2 12z"/></svg></template>
-<template id="icon-settings"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 6h9v2H3zM16 6h5v2h-5zM3 16h5v2H3zM12 16h9v2h-9z"/><circle cx="14" cy="7" r="3"/><circle cx="10" cy="17" r="3"/></svg></template>
+<template id="icon-settings"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 1 0 0-13zm0 3.5a3 3 0 1 1 0 6 3 3 0 1 1 0-6z"/><rect x="10.5" y="2" width="3" height="4"/><rect x="10.5" y="18" width="3" height="4"/><rect x="2" y="10.5" width="4" height="3"/><rect x="18" y="10.5" width="4" height="3"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(45 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(135 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(225 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(315 12 12)"/></svg></template>
 <template id="icon-music"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 4v10.3a3.5 3.5 0 1 0 2 3.2V8h6V4z"/></svg></template>
 
 <script type="module" src="remote.js"></script>
