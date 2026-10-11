@@ -18,6 +18,7 @@ from test_player import FakeWiim
 from bridge.app import (
     JUKEBOX_KEY,
     PLAYER_KEY,
+    REMOTE_FILES,
     BridgeConfig,
     NavidromeClient,
     build_app,
@@ -459,3 +460,32 @@ def test_bridge_server_keep_queue_option(tmp_path: Path, monkeypatch: pytest.Mon
     assert bridge_server.main(base) == 0
     assert bridge_server.main([*base, "--keep-queue-on-start"]) == 0
     assert [c.clear_on_start for c in captured] == [True, False]
+
+
+def test_remote_redirect_and_pages(tmp_path: Path) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.get("/remote", allow_redirects=False)
+        assert resp.status == 302
+        assert resp.headers["Location"] == "/remote/"
+
+        resp = await client.get("/remote/")
+        assert resp.status == 200
+        assert resp.content_type == "text/html"
+        assert "<title>" in await resp.text()
+        assert resp.headers["Cache-Control"] == "no-cache"
+
+        for name in REMOTE_FILES:
+            resp = await client.get(f"/remote/{name}")
+            assert resp.status == 200, name
+            assert resp.headers["Cache-Control"] == "no-cache"
+
+        for bad in ("/remote/nope.js", "/remote/..%2Fapp.py"):
+            resp = await client.get(bad)
+            assert resp.status == 404, bad
+        assert fake.requests == []
+
+        resp = await client.get("/rest/ping.view?u=dan&p=pw")
+        assert resp.status == 200
+        assert fake.count("/rest/ping.view") == 1
+
+    with_bridge(tmp_path, scenario)

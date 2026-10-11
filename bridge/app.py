@@ -160,6 +160,29 @@ async def _passthrough_session(app: web.Application) -> AsyncIterator[None]:
         yield
 
 
+REMOTE_DIR = Path(__file__).resolve().parent / "remote"
+REMOTE_FILES = ("index.html", "remote.css", "remote.js", "logic.js", "md5.js")
+REMOTE_HEADERS = {"Cache-Control": "no-cache"}
+
+
+def add_remote_routes(app: web.Application) -> None:
+    async def redirect(request: web.Request) -> web.StreamResponse:
+        raise web.HTTPFound("/remote/", headers=REMOTE_HEADERS)
+
+    async def index(request: web.Request) -> web.StreamResponse:
+        return web.FileResponse(REMOTE_DIR / "index.html", headers=REMOTE_HEADERS)
+
+    async def asset(request: web.Request) -> web.StreamResponse:
+        name = request.match_info["name"]
+        if name not in REMOTE_FILES:
+            return web.Response(status=404, text="not found", headers=REMOTE_HEADERS)
+        return web.FileResponse(REMOTE_DIR / name, headers=REMOTE_HEADERS)
+
+    app.router.add_get("/remote", redirect)
+    app.router.add_get("/remote/", index)
+    app.router.add_get("/remote/{name:.+}", asset)
+
+
 def build_app(
     config: BridgeConfig, wiim: Any, navidrome: NavidromeClient | None = None
 ) -> web.Application:
@@ -213,5 +236,6 @@ def build_app(
     app[JUKEBOX_KEY] = jukebox
     add_jukebox_routes(app, jukebox, authenticate)
     app.cleanup_ctx.append(_passthrough_session)
+    add_remote_routes(app)
     app.router.add_route("*", "/{tail:.*}", passthrough)
     return app

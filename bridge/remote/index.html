@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#121316">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>WiiM Remote</title>
+<link rel="stylesheet" href="remote.css">
+</head>
+<body>
+<div id="status" class="status" role="status" hidden></div>
+
+<main id="login" class="login" hidden>
+  <form id="login-form">
+    <h1>WiiM Remote</h1>
+    <label>User <input id="login-user" name="username" autocomplete="username" autocapitalize="none" required></label>
+    <label>Password <input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
+    <p id="login-error" class="error" role="alert"></p>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+</main>
+
+<div id="app" class="app" hidden>
+  <section id="tab-player" class="tab player" data-tab="player">
+    <div class="cover-wrap"><img id="cover" class="cover" alt="" hidden></div>
+    <div class="controls">
+      <p id="empty" class="empty" hidden>Nothing queued. Pick an album in Library.</p>
+      <div id="meta" class="meta">
+        <div id="title" class="title"></div>
+        <div id="artist" class="artist"></div>
+        <div id="album" class="album"></div>
+      </div>
+      <div class="seek">
+        <span id="elapsed" class="time">0:00</span>
+        <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
+        <span id="total" class="time">0:00</span>
+      </div>
+      <div class="transport">
+        <button id="prev" type="button">Previous</button>
+        <button id="play" type="button" class="primary big">Play</button>
+        <button id="next" type="button">Next</button>
+      </div>
+      <div class="volume">
+        <button id="mute" type="button" aria-pressed="false">Mute</button>
+        <input id="volume" type="range" min="0" max="100" step="1" value="0" aria-label="Volume">
+        <span id="volume-label" class="time">0</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-queue" class="tab" data-tab="queue" hidden>
+    <div class="bar"><button id="clear" type="button">Clear queue</button></div>
+    <ul id="queue" class="list"></ul>
+  </section>
+
+  <section id="tab-library" class="tab" data-tab="library" hidden>
+    <div class="bar"><input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off"></div>
+    <div id="library-list" class="list scroll"></div>
+    <div id="album-view" class="album-view" hidden>
+      <div class="bar">
+        <button id="album-back" type="button">Back</button>
+        <button id="album-play" type="button" class="primary">Play album</button>
+        <button id="album-add" type="button">Add to queue</button>
+      </div>
+      <h2 id="album-name" class="album-name"></h2>
+      <ul id="album-tracks" class="list"></ul>
+    </div>
+    <div id="library-footer" class="footer"><button id="signout" type="button">Sign out</button></div>
+  </section>
+
+  <nav class="tabs" aria-label="Sections">
+    <button type="button" data-go="player" aria-current="true">Player</button>
+    <button type="button" data-go="queue">Queue</button>
+    <button type="button" data-go="library">Library</button>
+  </nav>
+</div>
+<script type="module" src="remote.js"></script>
+</body>
+</html>
