@@ -1,9 +1,11 @@
 """Run the bridge: jukebox endpoint, audio proxy and Navidrome pass-through in one process."""
 
 import argparse
+import os
+import re
 import secrets
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from pathlib import Path
 
@@ -38,6 +40,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--info-file", type=Path, default=defaults.info_file, help="where to write the base URL"
     )
+    parser.add_argument(
+        "--no-info-file", action="store_true", help="do not write the info file (containers)"
+    )
     parser.add_argument("--device-base", default=DEFAULT_DEVICE_BASE, help="WiiM UPnP base URL")
     parser.add_argument("--status-url", default=DEFAULT_STATUS_URL, help="WiiM status API URL")
     parser.add_argument("--max-volume", type=int, default=100, help="volume ceiling, 0 to 100")
@@ -46,6 +51,32 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--queue-name", default="bridge", help="name of the device queue")
     return parser.parse_args(argv)
+
+
+SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,}")
+
+
+def resolve_credentials(credentials_path: str, environ: Mapping[str, str]) -> tuple[str, str]:
+    user = environ.get("BRIDGE_NAVIDROME_USER", "")
+    password = environ.get("BRIDGE_NAVIDROME_PASSWORD", "")
+    if user and password:
+        return user, password
+    if user or password or "BRIDGE_NAVIDROME_USER" in environ or "BRIDGE_NAVIDROME_PASSWORD" in environ:
+        raise ConfigError("set both BRIDGE_NAVIDROME_USER and BRIDGE_NAVIDROME_PASSWORD, or neither")
+    return load_credentials(Path(credentials_path).expanduser())
+
+
+def resolve_secret(arg: str | None, environ: Mapping[str, str]) -> str:
+    secret = arg or environ.get("BRIDGE_SECRET") or None
+    if secret is None:
+        return secrets.token_urlsafe(9)
+    if not SECRET_PATTERN.fullmatch(secret):
+        raise ConfigError("path secret must be at least 8 characters of A-Z, a-z, 0-9, _ or -")
+    return secret
+
+
+def hidden_base_url(advertise_host: str, port: int) -> str:
+    return f"http://{advertise_host}:{port}/s/<hidden>"
 
 
 def make_app_factory(config: BridgeConfig) -> Callable[[], Awaitable[web.Application]]:
@@ -67,7 +98,8 @@ def make_app_factory(config: BridgeConfig) -> Callable[[], Awaitable[web.Applica
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        user, password = load_credentials(Path(args.credentials).expanduser())
+        user, password = resolve_credentials(args.credentials, os.environ)
+        secret = resolve_secret(args.secret, os.environ)
     except ConfigError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -77,10 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     if problem is not None:
         print(f"error: {problem}", file=sys.stderr)
         return 2
-    secret = args.secret or secrets.token_urlsafe(9)
     base_url = f"http://{args.advertise_host}:{args.port}/s/{secret}"
-    poc_proxy.write_info_file(args.info_file, base_url, navidrome_url, args.log)
-    print(f"base URL: {base_url}", flush=True)
+    if not args.no_info_file:
+        poc_proxy.write_info_file(args.info_file, base_url, navidrome_url, args.log)
+    print(f"base URL: {hidden_base_url(args.advertise_host, args.port)}", flush=True)
     print(f"request log: {args.log}", flush=True)
     print(f"Feishin server URL: http://{args.advertise_host}:{args.port}", flush=True)
     config = BridgeConfig(

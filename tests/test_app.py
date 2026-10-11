@@ -15,6 +15,8 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_player import FakeWiim
 
+from bridge.subsonic import ConfigError
+from bridge.proxy import RequestLog
 from bridge.app import (
     JUKEBOX_KEY,
     PLAYER_KEY,
@@ -304,7 +306,7 @@ def server_args(tmp_path: Path, credentials: Path) -> list[str]:
         "--navidrome-url", "http://navidrome.invalid:4533",
         "--log", str(tmp_path / "out" / "requests.jsonl"),
         "--info-file", str(tmp_path / "info.json"),
-        "--secret", "S3",
+        "--secret", "S3cret-value",
         "--port", "9001",
         "--advertise-host", "10.0.0.5",
     ]  # fmt: skip
@@ -329,7 +331,7 @@ def test_bridge_server_main(
     monkeypatch.setattr(bridge_server.web, "run_app", fake_run_app)
     assert bridge_server.main(server_args(tmp_path, creds)) == 0
     info = json.loads((tmp_path / "info.json").read_text())
-    assert info["base_url"] == "http://10.0.0.5:9001/s/S3"
+    assert info["base_url"] == "http://10.0.0.5:9001/s/S3cret-value"
     assert started["port"] == 9001
     out = capsys.readouterr().out
     assert any(line.startswith("Feishin server URL: http://") for line in out.splitlines())
@@ -489,3 +491,101 @@ def test_remote_redirect_and_pages(tmp_path: Path) -> None:
         assert fake.count("/rest/ping.view") == 1
 
     with_bridge(tmp_path, scenario)
+
+
+def make_creds(tmp_path: Path) -> Path:
+    creds = tmp_path / "creds.json"
+    creds.write_text(json.dumps({"user": "fileuser", "password": "filepw"}))
+    creds.chmod(0o600)
+    return creds
+
+
+def test_resolve_credentials_from_environment(tmp_path: Path) -> None:
+    env = {"BRIDGE_NAVIDROME_USER": "u", "BRIDGE_NAVIDROME_PASSWORD": "p"}
+    assert bridge_server.resolve_credentials(str(tmp_path / "missing.json"), env) == ("u", "p")
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"BRIDGE_NAVIDROME_USER": "u"},
+        {"BRIDGE_NAVIDROME_PASSWORD": "p"},
+        {"BRIDGE_NAVIDROME_USER": "u", "BRIDGE_NAVIDROME_PASSWORD": ""},
+    ],
+)
+def test_resolve_credentials_partial_environment(tmp_path: Path, env: dict[str, str]) -> None:
+    with pytest.raises(ConfigError, match="both BRIDGE_NAVIDROME_USER"):
+        bridge_server.resolve_credentials(str(make_creds(tmp_path)), env)
+
+
+def test_resolve_credentials_falls_back_to_file(tmp_path: Path) -> None:
+    assert bridge_server.resolve_credentials(str(make_creds(tmp_path)), {}) == (
+        "fileuser",
+        "filepw",
+    )
+
+
+def test_resolve_secret_precedence() -> None:
+    env = {"BRIDGE_SECRET": "from-env-123"}
+    assert bridge_server.resolve_secret("from-arg-123", env) == "from-arg-123"
+    assert bridge_server.resolve_secret(None, env) == "from-env-123"
+
+
+def test_resolve_secret_random_default() -> None:
+    secret = bridge_server.resolve_secret(None, {})
+    assert bridge_server.SECRET_PATTERN.fullmatch(secret)
+    assert secret != bridge_server.resolve_secret(None, {})
+
+
+@pytest.mark.parametrize("bad", ["short", "has/slash", "has space12"])
+def test_resolve_secret_rejects_invalid(bad: str) -> None:
+    with pytest.raises(ConfigError, match="path secret"):
+        bridge_server.resolve_secret(bad, {})
+    with pytest.raises(ConfigError, match="path secret"):
+        bridge_server.resolve_secret(None, {"BRIDGE_SECRET": bad})
+
+
+def test_no_info_file_flag() -> None:
+    assert bridge_server.parse_args([]).no_info_file is False
+    assert bridge_server.parse_args(["--no-info-file"]).no_info_file is True
+
+
+def test_main_hides_secret_and_skips_info_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
+        return True, None
+
+    monkeypatch.setattr(poc_proxy, "ping_navidrome", accepted)
+    monkeypatch.setattr(bridge_server.web, "run_app", lambda app, **kw: app.close())
+    monkeypatch.setenv("BRIDGE_NAVIDROME_USER", "envuser")
+    monkeypatch.setenv("BRIDGE_NAVIDROME_PASSWORD", "envpw-value")
+    monkeypatch.setenv("BRIDGE_SECRET", "env-secret-99")
+    argv = [
+        *server_args(tmp_path, tmp_path / "missing.json"),
+        "--no-info-file",
+    ]
+    argv[argv.index("--secret") : argv.index("--secret") + 2] = []
+    assert bridge_server.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "base URL: http://10.0.0.5:9001/s/<hidden>" in out
+    assert "env-secret-99" not in out
+    assert "envpw-value" not in out
+    assert not (tmp_path / "info.json").exists()
+
+
+def test_healthz_touches_nothing(tmp_path: Path) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        before = len(fake.requests)
+        wiim_before = list(wiim.calls)
+        resp = await client.get("/healthz")
+        assert resp.status == 200
+        assert await resp.text() == "ok"
+        assert len(fake.requests) == before
+        assert wiim.calls == wiim_before
+
+    with_bridge(tmp_path, scenario)
+
+
+def test_request_log_accepts_dev_null() -> None:
+    RequestLog(Path("/dev/null")).write({"req": 1})

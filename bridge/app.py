@@ -237,5 +237,10 @@ def build_app(
     add_jukebox_routes(app, jukebox, authenticate)
     app.cleanup_ctx.append(_passthrough_session)
     add_remote_routes(app)
+
+    async def healthz(request: web.Request) -> web.StreamResponse:
+        return web.Response(text="ok")
+
+    app.router.add_get("/healthz", healthz)
     app.router.add_route("*", "/{tail:.*}", passthrough)
     return app
