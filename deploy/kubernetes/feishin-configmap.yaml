@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: feishin
+  labels:
+    app.kubernetes.io/name: feishin
+data:
+  # Address of the bridge as the browser reaches it, not of Navidrome.
+  # Must be HTTPS when this page is served over HTTPS.
+  SERVER_URL: "https://bridge.example.org"
+  SERVER_TYPE: "navidrome"
+  # Name shown on the login screen.
+  SERVER_NAME: "WiiM"
+  # The user cannot change the server address.
+  SERVER_LOCK: "true"
+  ANALYTICS_DISABLED: "true"

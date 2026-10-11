@@ -5,6 +5,11 @@ resources:
   - configmap.yaml
   - deployment.yaml
   - service.yaml
+  - feishin-configmap.yaml
+  - feishin-deployment.yaml
+  - feishin-service.yaml
 images:
   - name: ghcr.io/m8-t/navidrome-wiim-bridge
     newTag: 0.5.1
+  - name: ghcr.io/m8-t/feishin-jukebox
+    newTag: 1.17.0-jukebox

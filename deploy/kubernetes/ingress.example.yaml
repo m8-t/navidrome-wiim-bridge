@@ -1,5 +1,6 @@
-# Needed when a web page served over HTTPS calls the bridge: it may only
-# reach the bridge over HTTPS. Not part of the kustomization.
+# The web UI is served over HTTPS, and a page served over HTTPS may only
+# reach the bridge over HTTPS, so both get a host. Not part of the
+# kustomization.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -12,6 +13,9 @@ spec:
     - hosts:
         - bridge.example.org
       secretName: bridge-example-org-tls
+    - hosts:
+        - music.example.org
+      secretName: music-example-org-tls
   rules:
     - host: bridge.example.org
       http:
@@ -23,3 +27,13 @@ spec:
                 name: wiim-bridge
                 port:
                   number: 8098
+    - host: music.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: feishin
+                port:
+                  number: 9180

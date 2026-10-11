@@ -1,0 +1,15 @@
+# For the ingress or gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: feishin
+  labels:
+    app.kubernetes.io/name: feishin
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: feishin
+  ports:
+    - name: http
+      port: 9180
+      targetPort: http

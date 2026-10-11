@@ -8,6 +8,16 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [Unreleased]
+
+### Added
+
+- The Kubernetes manifests in `deploy/kubernetes/` now deploy the patched Feishin web
+  UI next to the bridge: a ConfigMap, a Deployment and a Service, and a second host in
+  the Ingress and Gateway API examples. One `kubectl apply -k` brings up everything
+  except Navidrome. The folder's README has the steps and says how to leave the web UI
+  out. The bridge itself is unchanged.
+
 ## [0.5.1] - 2026-10-11
 
 ### Changed
