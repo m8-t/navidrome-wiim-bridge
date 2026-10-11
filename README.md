@@ -240,16 +240,18 @@ podman run --rm -p 8098:8098 \
 ### Kubernetes
 
 Ready-made manifests are in [`deploy/kubernetes/`](deploy/kubernetes/). They deploy the
-whole stack except Navidrome, which you bring yourself:
+whole stack:
 
+- Navidrome: a ConfigMap, a Deployment with the music library mounted read-only, a
+  volume claim for its database and a Service;
 - the bridge: a ConfigMap for the addresses, a Deployment, a Service for clients and a
   LoadBalancer Service with a fixed address for the WiiM;
 - the patched Feishin web UI: a ConfigMap, a Deployment and a Service;
-- examples for an Ingress and a Gateway API route that give both a host.
+- examples for an Ingress and a Gateway API route that give each of them a host.
 
 The login goes into a Secret you create yourself. Plain YAML with a
 `kustomization.yaml`, no Helm. The steps are in that folder's README, which also says
-how to leave the web UI out.
+how to use a Navidrome you already run and how to leave the web UI out.
 
 `GET /healthz` answers `ok` without touching the device or Navidrome.
 

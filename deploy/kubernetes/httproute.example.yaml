@@ -1,6 +1,24 @@
 # The web UI is served over HTTPS, and a page served over HTTPS may only
-# reach the bridge over HTTPS, so both get a host. Not part of the
+# reach the bridge over HTTPS, so both get a host. Navidrome's own web UI
+# gets a host as well; it is where users are created. Not part of the
 # kustomization.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: navidrome
+  labels:
+    app.kubernetes.io/name: navidrome
+spec:
+  parentRefs:
+    - name: my-gateway
+      namespace: gateway-system
+  hostnames:
+    - navidrome.example.org
+  rules:
+    - backendRefs:
+        - name: navidrome
+          port: 4533
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

@@ -1,5 +1,6 @@
 # The web UI is served over HTTPS, and a page served over HTTPS may only
-# reach the bridge over HTTPS, so both get a host. Not part of the
+# reach the bridge over HTTPS, so both get a host. Navidrome's own web UI
+# gets a host as well; it is where users are created. Not part of the
 # kustomization.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -11,12 +12,25 @@ spec:
   # ingressClassName: nginx
   tls:
     - hosts:
+        - navidrome.example.org
+      secretName: navidrome-example-org-tls
+    - hosts:
         - bridge.example.org
       secretName: bridge-example-org-tls
     - hosts:
         - music.example.org
       secretName: music-example-org-tls
   rules:
+    - host: navidrome.example.org
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: navidrome
+                port:
+                  number: 4533
     - host: bridge.example.org
       http:
         paths:

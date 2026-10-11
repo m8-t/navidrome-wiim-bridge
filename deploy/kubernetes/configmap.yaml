@@ -9,8 +9,8 @@ data:
   BRIDGE_ADVERTISE_HOST: "192.0.2.50"
   # IP address of the WiiM amplifier.
   BRIDGE_DEVICE_HOST: "192.0.2.60"
-  # Navidrome base URL, reachable from this pod.
-  BRIDGE_NAVIDROME_URL: "http://navidrome.navidrome.svc.cluster.local:4533"
+  # Navidrome base URL. This is the Service from navidrome-service.yaml.
+  BRIDGE_NAVIDROME_URL: "http://navidrome:4533"
   # debug, info, warn or error.
   BRIDGE_LOG_LEVEL: "info"
   # Upper volume limit, 0 to 100.

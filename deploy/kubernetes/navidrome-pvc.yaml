@@ -1,0 +1,13 @@
+# Navidrome's database and cache. Uses the cluster's default storage class.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: navidrome-data
+  labels:
+    app.kubernetes.io/name: navidrome
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

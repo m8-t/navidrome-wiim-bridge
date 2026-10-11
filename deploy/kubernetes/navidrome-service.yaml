@@ -1,0 +1,15 @@
+# For the bridge and the ingress or gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: navidrome
+  labels:
+    app.kubernetes.io/name: navidrome
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: navidrome
+  ports:
+    - name: http
+      port: 4533
+      targetPort: http

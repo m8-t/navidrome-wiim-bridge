@@ -12,11 +12,18 @@ Each release is published as a container image:
 
 ### Added
 
-- The Kubernetes manifests in `deploy/kubernetes/` now deploy the patched Feishin web
-  UI next to the bridge: a ConfigMap, a Deployment and a Service, and a second host in
-  the Ingress and Gateway API examples. One `kubectl apply -k` brings up everything
-  except Navidrome. The folder's README has the steps and says how to leave the web UI
-  out. The bridge itself is unchanged.
+- The Kubernetes manifests in `deploy/kubernetes/` now deploy the whole stack, not the
+  bridge alone: Navidrome (ConfigMap, Deployment, Service and a volume claim for its
+  database, with the music library as a read-only NFS volume) and the patched Feishin
+  web UI (ConfigMap, Deployment, Service). The Ingress and Gateway API examples have a
+  host for each of the three. One `kubectl apply -k` brings up everything. The
+  folder's README has the steps and says how to use a Navidrome you already run and
+  how to leave the web UI out. The bridge itself is unchanged.
+
+### Changed
+
+- `BRIDGE_NAVIDROME_URL` in the example ConfigMap now points at the Navidrome Service
+  from the same folder (`http://navidrome:4533`).
 
 ## [0.5.1] - 2026-10-11
 
