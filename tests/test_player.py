@@ -54,6 +54,9 @@ class FakeWiim:
     async def set_volume(self, volume: int) -> str:
         return await self._record("set_volume", volume)
 
+    async def set_mute(self, muted: bool) -> str:
+        return await self._record("set_mute", muted)
+
     async def pause(self) -> str:
         return await self._record("pause")
 
@@ -349,3 +352,12 @@ def test_refresh_reports_volume_without_control() -> None:
     status = run(player.refresh())
     assert not status.in_control
     assert status.volume == 33
+
+
+def test_refresh_reports_mute_and_set_mute_calls_device() -> None:
+    fake = FakeWiim()
+    state_with(fake, muted=True)
+    player = Player(fake, url_for)  # type: ignore[arg-type]
+    assert run(player.refresh()).muted is True
+    run(player.set_mute(False))
+    assert ("set_mute", (False,)) in fake.calls

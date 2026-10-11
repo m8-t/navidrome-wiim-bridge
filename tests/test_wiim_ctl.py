@@ -43,6 +43,7 @@ from wiim_ctl import (
     InputError,
     build_parser,
     cmd_queue_create,
+    cmd_mute,
     cmd_volume,
     queue_context_from_args,
 )
@@ -784,3 +785,31 @@ def test_volume_command_sends_set_volume() -> None:
     assert "<DesiredVolume>20</DesiredVolume>" in render_calls[0][1]
     assert result["action"] == "volume"
     assert result["volume"] == 20
+
+
+def test_wiim_set_mute() -> None:
+    render_calls: list[tuple[str, str]] = []
+
+    async def scenario(wiim: Wiim) -> None:
+        await wiim.set_mute(True)
+        await wiim.set_mute(False)
+
+    _run_against_fake_device(scenario, render_calls=render_calls)
+    header, first = render_calls[0]
+    assert header == '"urn:schemas-upnp-org:service:RenderingControl:1#SetMute"'
+    assert "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredMute>1</DesiredMute>" in first
+    assert "<DesiredMute>0</DesiredMute>" in render_calls[1][1]
+
+
+def test_mute_command_sends_set_mute() -> None:
+    render_calls: list[tuple[str, str]] = []
+    args = build_parser().parse_args(["mute", "--on"])
+
+    async def scenario(wiim: Wiim) -> dict[str, object]:
+        return await cmd_mute(wiim, args)
+
+    result, _, _ = _run_against_fake_device(scenario, render_calls=render_calls)
+    assert len(render_calls) == 1
+    assert result["muted"] is True
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["mute"])

@@ -31,6 +31,7 @@ class PlayerStatus:
     in_control: bool
     transport: str | None
     volume: int | None = None
+    muted: bool | None = None
 
 
 class Player:
@@ -176,6 +177,9 @@ class Player:
         await self._wiim.set_volume(clamped)
         return clamped
 
+    async def set_mute(self, muted: bool) -> None:
+        await self._wiim.set_mute(muted)
+
     async def clear(self) -> None:
         try:
             await self._wiim.stop()
@@ -210,4 +214,5 @@ class Player:
             in_control=self._in_control,
             transport=s.transport,
             volume=s.volume,
+            muted=s.muted,
         )

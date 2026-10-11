@@ -62,6 +62,7 @@ class Jukebox:
         self.songs: list[Mapping[str, Any]] = []
         self.current = 0
         self.gain = 0.5
+        self.muted = False
         self.loaded = False
         self.playing = False
         self.position = 0
@@ -77,6 +78,7 @@ class Jukebox:
             "remove": self._remove,
             "shuffle": self._shuffle,
             "setGain": self._set_gain,
+            "setMute": self._noop,
         }
 
     async def handle(
@@ -86,13 +88,17 @@ class Jukebox:
         index: int | None,
         offset: int | None,
         gain: float | None,
+        mute: bool | None = None,
     ) -> dict[str, Any]:
         if action not in self._actions:
             raise JukeboxError(0, "unknown action")
         try:
             if action not in ("set", "clear"):
                 await self._sync()
-            await self._actions[action](ids, index, offset, gain)
+            if action == "setMute":
+                await self._set_mute(mute)
+            else:
+                await self._actions[action](ids, index, offset, gain)
         except JukeboxError:
             raise
         except (UpnpError, PlayerError, ValueError, *REQUEST_ERRORS) as exc:
@@ -105,6 +111,7 @@ class Jukebox:
             "playing": self.playing,
             "gain": self.gain,
             "position": self.position,
+            "muted": self.muted,
         }
 
     def _payload(self, action: str) -> dict[str, Any]:
@@ -119,6 +126,8 @@ class Jukebox:
         status = await self._player.refresh()
         if status.volume is not None:
             self.gain = status.volume / 100
+        if status.muted is not None:
+            self.muted = status.muted
         if not self.loaded:
             return
         if not status.in_control:
@@ -228,6 +237,12 @@ class Jukebox:
     async def _shuffle(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         raise JukeboxError(0, "shuffle is not supported")
 
+    async def _set_mute(self, mute: bool | None) -> None:
+        if mute is None:
+            raise JukeboxError(10, "Required parameter is missing: mute")
+        await self._player.set_mute(mute)
+        self.muted = mute
+
     async def _set_gain(
         self, ids: Sequence[str], index: Any, offset: Any, gain: float | None
     ) -> None:
@@ -244,6 +259,17 @@ def _parse_int(params: Mapping[str, str], name: str) -> int | None:
         return int(params[name])
     except ValueError:
         raise JukeboxError(10, f"Invalid parameter: {name}") from None
+
+
+def _parse_mute(params: Mapping[str, str]) -> bool | None:
+    if "mute" not in params:
+        return None
+    value = params["mute"].strip().lower()
+    if value in ("true", "1"):
+        return True
+    if value in ("false", "0"):
+        return False
+    raise JukeboxError(10, "Invalid parameter: mute")
 
 
 def _parse_gain(params: Mapping[str, str]) -> float | None:
@@ -292,8 +318,9 @@ def add_jukebox_routes(
             index = _parse_int(params, "index")
             offset = _parse_int(params, "offset")
             gain = _parse_gain(params)
+            mute = _parse_mute(params)
             async with lock:
-                payload = await jukebox.handle(action, ids, index, offset, gain)
+                payload = await jukebox.handle(action, ids, index, offset, gain, mute)
         except JukeboxError as exc:
             return reply(error_envelope(exc.code, exc.message))
         return reply(ok_envelope(payload))

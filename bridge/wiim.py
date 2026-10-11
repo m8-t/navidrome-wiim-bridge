@@ -373,6 +373,14 @@ class Wiim:
             RENDERING_CONTROL_PATH,
         )
 
+    async def set_mute(self, muted: bool) -> str:
+        return await self.call(
+            "SetMute",
+            {"InstanceID": "0", "Channel": "Master", "DesiredMute": "1" if muted else "0"},
+            RENDERING_SERVICE,
+            RENDERING_CONTROL_PATH,
+        )
+
     async def _api_status(self) -> ApiStatus:
         try:
             async with self._status_session.get(self._status_url, ssl=False) as resp:

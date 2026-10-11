@@ -32,6 +32,7 @@ class FakePlayer:
         self.override: PlayerStatus | None = None
         self.failing: dict[str, Exception] = {}
         self.volume: int | None = None
+        self.muted: bool | None = None
         self.ceiling = 100
 
     def _rec(self, name: str, *args: Any) -> None:
@@ -64,6 +65,9 @@ class FakePlayer:
         self._rec("resume")
         self.is_playing = True
 
+    async def set_mute(self, muted: bool) -> None:
+        self._rec("set_mute", muted)
+
     async def set_volume(self, volume: int) -> int:
         clamped = min(max(volume, 0), self.ceiling)
         self._rec("set_volume", clamped)
@@ -76,7 +80,7 @@ class FakePlayer:
     async def refresh(self) -> PlayerStatus:
         if self.override is not None:
             return self.override
-        return PlayerStatus(self.idx, self.is_playing, 0.0, True, None, self.volume)
+        return PlayerStatus(self.idx, self.is_playing, 0.0, True, None, self.volume, self.muted)
 
 
 async def lookup(song_id: str) -> Mapping[str, Any] | None:
@@ -97,7 +101,7 @@ def make() -> tuple[Jukebox, FakePlayer]:
 
 def do(jb: Jukebox, action: str, ids: Sequence[str] = (), **kw: Any) -> dict[str, Any]:
     return run(  # type: ignore[no-any-return]
-        jb.handle(action, ids, kw.get("index"), kw.get("offset"), kw.get("gain"))
+        jb.handle(action, ids, kw.get("index"), kw.get("offset"), kw.get("gain"), kw.get("mute"))
     )
 
 
@@ -109,7 +113,7 @@ def test_set_returns_status_and_touches_no_device() -> None:
     jb, player = make()
     payload = do(jb, "set", ["a", "b"])
     assert payload == {
-        "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0}
+        "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0, "muted": False}
     }
     assert player.calls == []
 
@@ -379,3 +383,47 @@ def test_status_picks_up_volume_changed_on_the_remote() -> None:
     assert status["gain"] == 0.41
     assert status["playing"] is False
     assert "load" not in names(player)
+
+
+def test_status_includes_muted_and_follows_refresh() -> None:
+    jb, player = make()
+    assert do(jb, "status")["jukeboxStatus"]["muted"] is False
+    player.muted = True
+    assert do(jb, "status")["jukeboxStatus"]["muted"] is True
+    player.muted = False
+    assert do(jb, "get")["jukeboxPlaylist"]["muted"] is False
+
+
+def test_set_mute_calls_player_and_keeps_gain() -> None:
+    jb, player = make()
+    status = do(jb, "setMute", mute=True)["jukeboxStatus"]
+    assert ("set_mute", (True,)) in player.calls
+    assert status["muted"] is True
+    assert status["gain"] == 0.5
+
+
+def test_set_mute_requires_a_value() -> None:
+    jb, _ = make()
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setMute")
+    assert err.value.code == 10
+
+
+def test_http_set_mute() -> None:
+    async def scenario() -> None:
+        jb, player = make()
+        async with serve(jb) as client:
+            resp = await client.get("/rest/jukeboxControl?action=setMute&mute=false")
+            body = (await resp.json())["subsonic-response"]
+            assert body["jukeboxStatus"]["muted"] is False
+            assert ("set_mute", (False,)) in player.calls
+            resp = await client.get("/rest/jukeboxControl?action=setMute&mute=TRUE")
+            assert (await resp.json())["subsonic-response"]["jukeboxStatus"]["muted"] is True
+            resp = await client.get("/rest/jukeboxControl?action=setMute&mute=maybe")
+            error = (await resp.json())["subsonic-response"]["error"]
+            assert error["code"] == 10
+            assert "mute" in error["message"]
+            resp = await client.get("/rest/jukeboxControl?action=status")
+            assert "muted" in (await resp.json())["subsonic-response"]["jukeboxStatus"]
+
+    run(scenario())

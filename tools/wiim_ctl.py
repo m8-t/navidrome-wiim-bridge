@@ -115,6 +115,13 @@ async def cmd_volume(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
     return {"action": "volume", "volume": args.set, "t_start": t0, "ms": (t1 - t0) * 1000}
 
 
+async def cmd_mute(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
+    t0 = time.time()
+    await wiim.set_mute(args.on)
+    t1 = time.time()
+    return {"action": "mute", "muted": args.on, "t_start": t0, "ms": (t1 - t0) * 1000}
+
+
 async def cmd_seek(wiim: Wiim, args: argparse.Namespace) -> dict[str, Any]:
     t0 = time.time()
     await wiim.seek(args.seconds)
@@ -275,6 +282,7 @@ COMMANDS: dict[str, Handler] = {
     "previous": _simple_command("previous", "previous"),
     "seek": cmd_seek,
     "volume": cmd_volume,
+    "mute": cmd_mute,
     "queue-create": cmd_queue_create,
     "queue-play": cmd_queue_play,
     "queue-index": cmd_queue_index,
@@ -329,6 +337,10 @@ def build_parser() -> argparse.ArgumentParser:
     seek.add_argument("--seconds", type=int, required=True)
     volume = sub.add_parser("volume", help="set the device volume")
     volume.add_argument("--set", type=int, required=True)
+    mute = sub.add_parser("mute", help="mute or unmute the device")
+    group = mute.add_mutually_exclusive_group(required=True)
+    group.add_argument("--on", dest="on", action="store_true")
+    group.add_argument("--off", dest="on", action="store_false")
     watch = sub.add_parser("watch", help="record device state to a JSON lines file")
     watch.add_argument("--seconds", type=int, required=True)
     watch.add_argument("--out", required=True)
