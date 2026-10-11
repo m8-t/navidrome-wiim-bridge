@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiim-bridge
+  labels:
+    app.kubernetes.io/name: wiim-bridge
+data:
+  # Must equal the fixed LoadBalancer address set in service.yaml.
+  BRIDGE_ADVERTISE_HOST: "192.0.2.50"
+  # IP address of the WiiM amplifier.
+  BRIDGE_DEVICE_HOST: "192.0.2.60"
+  # Navidrome base URL, reachable from this pod.
+  BRIDGE_NAVIDROME_URL: "http://navidrome.navidrome.svc.cluster.local:4533"
+  # debug, info, warn or error.
+  BRIDGE_LOG_LEVEL: "info"
+  # Upper volume limit, 0 to 100.
+  # BRIDGE_MAX_VOLUME: "70"

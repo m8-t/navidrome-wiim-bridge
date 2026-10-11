@@ -1,0 +1,36 @@
+# For the ingress or gateway and in-cluster clients.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiim-bridge
+  labels:
+    app.kubernetes.io/name: wiim-bridge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: wiim-bridge
+  ports:
+    - name: http
+      port: 8098
+      targetPort: http
+---
+# For the amplifier, which fetches audio by IP over plain HTTP.
+# The address must be fixed and equal to BRIDGE_ADVERTISE_HOST in configmap.yaml.
+# The annotation below is MetalLB's; other load balancers have their own way
+# to request a fixed address (check their documentation).
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiim-bridge-lan
+  labels:
+    app.kubernetes.io/name: wiim-bridge
+  annotations:
+    metallb.io/loadBalancerIPs: 192.0.2.50
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: wiim-bridge
+  ports:
+    - name: http
+      port: 8098
+      targetPort: http
