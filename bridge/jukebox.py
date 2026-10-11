@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
@@ -27,6 +28,11 @@ ENVELOPE_BASE = {
 WRONG_LOGIN = 40
 QUIET_ACTIONS = frozenset({"get", "status"})
 PATHS = ("/rest/jukeboxControl", "/rest/jukeboxControl.view")
+SEEK_WAIT_STEP = 0.25
+SEEK_WAIT_TIMEOUT = 8.0
+SEEK_ATTEMPTS = 4
+SEEK_VERIFY_CHECKS = 4
+SEEK_TOLERANCE = 3
 CORS_ORIGIN = {"Access-Control-Allow-Origin": "*"}
 CORS_PREFLIGHT = {
     **CORS_ORIGIN,
@@ -62,9 +68,18 @@ def error_envelope(code: int, message: str) -> dict[str, Any]:
 
 
 class Jukebox:
-    def __init__(self, player: Player, lookup: SongLookup) -> None:
+    def __init__(
+        self,
+        player: Player,
+        lookup: SongLookup,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._player = player
         self._lookup = lookup
+        self._sleep = sleep
+        self._clock = clock
         self.songs: list[Mapping[str, Any]] = []
         self.current = 0
         self.gain = 0.5
@@ -147,6 +162,33 @@ class Jukebox:
         self.playing = status.playing
         self.position = int(status.position_s)
 
+    async def _seek_when_playing(self, index: int, seconds: int) -> bool:
+        deadline = self._clock() + SEEK_WAIT_TIMEOUT
+        while True:
+            status = await self._player.refresh()
+            if status.in_control and status.playing and status.index == index:
+                break
+            if self._clock() >= deadline:
+                logger.warning(
+                    "seek to %ds skipped: device did not start track %d in time", seconds, index
+                )
+                return False
+            await self._sleep(SEEK_WAIT_STEP)
+        for _ in range(SEEK_ATTEMPTS):
+            await self._player.seek(seconds)
+            for _ in range(SEEK_VERIFY_CHECKS):
+                await self._sleep(SEEK_WAIT_STEP)
+                status = await self._player.refresh()
+                if status.position_s >= seconds - SEEK_TOLERANCE:
+                    return True
+                if self._clock() >= deadline:
+                    break
+            else:
+                continue
+            break
+        logger.warning("seek to %ds not confirmed by the device", seconds)
+        return False
+
     async def _lookup_all(self, ids: Sequence[str]) -> list[Mapping[str, Any]]:
         if not ids:
             raise JukeboxError(10, "Required parameter is missing: id")
@@ -193,7 +235,7 @@ class Jukebox:
             await self._player.load(self._tracks(), start=self.current, play=True)
             self.loaded = True
             if self.position > 0:
-                await self._player.seek(self.position)
+                await self._seek_when_playing(self.current, self.position)
         self.playing = True
 
     async def _stop(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
@@ -210,7 +252,7 @@ class Jukebox:
             if target != self.current:
                 await self._player.play_index(target)
                 if seconds > 0:
-                    await self._player.seek(seconds)
+                    await self._seek_when_playing(target, seconds)
                 if not self.playing:
                     await self._player.pause()
             else:

@@ -8,6 +8,9 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from bridge.jukebox import (
+    SEEK_ATTEMPTS,
+    SEEK_WAIT_STEP,
+    SEEK_WAIT_TIMEOUT,
     Jukebox,
     JukeboxError,
     add_jukebox_routes,
@@ -35,6 +38,16 @@ class FakePlayer:
         self.volume: int | None = None
         self.muted: bool | None = None
         self.ceiling = 100
+        self.pos = 0.0
+        self.seeks_to_take = 1
+        self.landing_offset = 0
+        self.lag_checks = 0
+        self.lag_left = 0
+        self.pending: float | None = None
+        self.seek_count = 0
+        self.pre_refreshes: list[tuple[int | None, bool]] = []
+        self.last_ok = False
+        self.seek_ok: list[bool] = []
 
     def _rec(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -57,6 +70,13 @@ class FakePlayer:
 
     async def seek(self, seconds: int) -> None:
         self._rec("seek", seconds)
+        self.seek_ok.append(self.last_ok)
+        self.seek_count += 1
+        if self.seek_count >= self.seeks_to_take:
+            if self.lag_checks:
+                self.pending, self.lag_left = seconds + self.landing_offset, self.lag_checks
+            else:
+                self.pos = seconds + self.landing_offset
 
     async def pause(self) -> None:
         self._rec("pause")
@@ -81,7 +101,13 @@ class FakePlayer:
     async def refresh(self) -> PlayerStatus:
         if self.override is not None:
             return self.override
-        return PlayerStatus(self.idx, self.is_playing, 0.0, True, None, self.volume, self.muted)
+        if self.pending is not None:
+            self.lag_left -= 1
+            if self.lag_left <= 0:
+                self.pos, self.pending = self.pending, None
+        idx, playing = self.pre_refreshes.pop(0) if self.pre_refreshes else (self.idx, self.is_playing)
+        self.last_ok = playing and idx == self.idx
+        return PlayerStatus(idx, playing, self.pos, True, None, self.volume, self.muted)
 
 
 async def lookup(song_id: str) -> Mapping[str, Any] | None:
@@ -95,9 +121,29 @@ def run(coro: Awaitable[Any]) -> Any:
     return asyncio.run(guarded())
 
 
+class FakeTime:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept = 0.0
+
+    def clock(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept += seconds
+        self.now += seconds
+
+
 def make() -> tuple[Jukebox, FakePlayer]:
+    jb, player, _ = make_timed()
+    return jb, player
+
+
+def make_timed() -> tuple[Jukebox, FakePlayer, FakeTime]:
     player = FakePlayer()
-    return Jukebox(player, lookup), player  # type: ignore[arg-type]
+    fake = FakeTime()
+    jb = Jukebox(player, lookup, sleep=fake.sleep, clock=fake.clock)  # type: ignore[arg-type]
+    return jb, player, fake
 
 
 def do(jb: Jukebox, action: str, ids: Sequence[str] = (), **kw: Any) -> dict[str, Any]:
@@ -159,6 +205,122 @@ def test_skip_before_start_sets_load_index_and_pending_seek() -> None:
     do(jb, "start")
     assert player.calls[0][1][1] == 1
     assert player.calls[1] == ("seek", (30,))
+
+
+def seek_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "bridge.jukebox" and r.levelno == logging.WARNING
+    ]
+
+
+def test_start_waits_for_playing_before_seeking() -> None:
+    jb, player, _ = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "skip", index=0, offset=34)
+    player.pre_refreshes = [(None, False), (None, False)]
+    status = do(jb, "start")["jukeboxStatus"]
+    assert names(player) == ["load", "seek"]
+    assert player.seek_ok == [True]
+    assert player.pos == 34
+    assert status["playing"] is True
+    assert status["position"] == 34
+
+
+def test_seek_retried_when_first_is_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = make_timed()
+    player.seeks_to_take = 2
+    do(jb, "set", ["a"])
+    do(jb, "skip", index=0, offset=34)
+    do(jb, "start")
+    assert names(player) == ["load", "seek", "seek"]
+    assert seek_warnings(caplog) == []
+
+
+def test_seek_confirmed_on_third_check(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = make_timed()
+    player.lag_checks = 3
+    do(jb, "set", ["a"])
+    do(jb, "skip", index=0, offset=34)
+    do(jb, "start")
+    assert names(player).count("seek") == 1
+    assert seek_warnings(caplog) == []
+
+
+def test_seek_never_confirmed_still_starts(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = make_timed()
+    player.seeks_to_take = 99
+    do(jb, "set", ["a"])
+    do(jb, "skip", index=0, offset=34)
+    status = do(jb, "start")["jukeboxStatus"]
+    assert names(player).count("seek") == SEEK_ATTEMPTS
+    assert seek_warnings(caplog) == ["seek to 34s not confirmed by the device"]
+    assert status["playing"] is True
+
+
+def test_device_never_starts_sends_no_seek(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, fake = make_timed()
+    player.pre_refreshes = [(0, False)] * 1000
+    do(jb, "set", ["a"])
+    do(jb, "skip", index=0, offset=34)
+    status = do(jb, "start")["jukeboxStatus"]
+    assert "seek" not in names(player)
+    assert seek_warnings(caplog) == ["seek to 34s skipped: device did not start track 0 in time"]
+    assert SEEK_WAIT_TIMEOUT - SEEK_WAIT_STEP < fake.slept <= SEEK_WAIT_TIMEOUT + SEEK_WAIT_STEP
+    assert status["playing"] is True
+
+
+def test_seek_waits_for_matching_index() -> None:
+    jb, player, _ = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "skip", index=1, offset=34)
+    player.pre_refreshes = [(0, True), (0, True)]
+    do(jb, "start")
+    assert names(player) == ["load", "seek"]
+    assert player.seek_ok == [True]
+
+
+def test_seek_within_tolerance_is_confirmed() -> None:
+    jb, player, _ = make_timed()
+    player.landing_offset = -2
+    do(jb, "set", ["a"])
+    do(jb, "skip", index=0, offset=34)
+    do(jb, "start")
+    assert names(player).count("seek") == 1
+
+
+def test_start_without_position_sends_no_seek_and_no_wait() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    assert names(player) == ["load"]
+    assert fake.slept == 0
+
+
+def test_skip_to_other_track_with_offset_waits_for_playing() -> None:
+    jb, player, _ = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.calls.clear()
+    player.pre_refreshes = [(0, True), (1, False)]
+    do(jb, "skip", index=1, offset=42)
+    assert names(player) == ["play_index", "seek"]
+    assert player.seek_ok == [True]
+
+
+def test_skip_same_track_seeks_without_waiting() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.calls.clear()
+    do(jb, "skip", index=0, offset=42)
+    assert player.calls == [("seek", (42,))]
+    assert fake.slept == 0
 
 
 def test_loaded_skip_seeks_or_jumps() -> None:
