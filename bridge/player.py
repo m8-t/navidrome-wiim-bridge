@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from bridge.soap import UpnpError
 from bridge.wiim import QueueTrack, Wiim, build_queue_context
 
-DEVICE_QUEUE_URI = "SONGLIST-NETWORK"
+DEVICE_QUEUE_URIS = (None, "", "SONGLIST-NETWORK")
 PLAYING_STATES = ("PLAYING", "TRANSITIONING")
 
 
@@ -180,7 +180,7 @@ class Player:
         s = await self._wiim.state()
         ours = (
             self._in_control
-            and s.current_uri == DEVICE_QUEUE_URI
+            and s.current_uri in DEVICE_QUEUE_URIS
             and s.queue_index is not None
             and 1 <= s.queue_index <= len(self._tracks)
         )

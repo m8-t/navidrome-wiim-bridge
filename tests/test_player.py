@@ -20,7 +20,7 @@ class FakeWiim:
         self.device_state = DeviceState(
             t=0.0,
             transport="PLAYING",
-            current_uri="SONGLIST-NETWORK",
+            current_uri=None,
             next_uri=None,
             api_status="play",
             curpos_ms=0,
@@ -227,7 +227,7 @@ def state_with(fake: FakeWiim, **changes: Any) -> None:
 
 def test_refresh_follows_device() -> None:
     player, fake = loaded()
-    state_with(fake, queue_index=3, transport="PLAYING", curpos_ms=4200)
+    state_with(fake, current_uri=None, queue_index=3, transport="PLAYING", curpos_ms=4200)
     status = run(player.refresh())
     assert status == PlayerStatus(
         index=2, playing=True, position_s=4.2, in_control=True, transport="PLAYING"
@@ -237,11 +237,28 @@ def test_refresh_follows_device() -> None:
 
 def test_refresh_paused() -> None:
     player, fake = loaded()
-    state_with(fake, queue_index=2, transport="PAUSED_PLAYBACK")
+    state_with(fake, current_uri=None, queue_index=2, transport="PAUSED_PLAYBACK")
     status = run(player.refresh())
     assert not status.playing
     assert status.index == 1
     assert player.index == 1
+
+
+def test_refresh_stopped_queue_is_still_ours() -> None:
+    player, fake = loaded()
+    state_with(fake, current_uri="SONGLIST-NETWORK", queue_index=2, transport="STOPPED")
+    status = run(player.refresh())
+    assert status.in_control
+    assert status.index == 1
+    assert not status.playing
+
+
+def test_refresh_no_uri_and_no_queue_index_is_not_ours() -> None:
+    player, fake = loaded()
+    state_with(fake, current_uri=None, queue_index=None, transport="STOPPED")
+    status = run(player.refresh())
+    assert not status.in_control
+    assert player.index is None
 
 
 def test_refresh_other_source_drops_control() -> None:
