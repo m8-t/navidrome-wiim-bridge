@@ -4,6 +4,8 @@ import { md5 } from "../../bridge/remote/md5.js";
 import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
+  formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
+  mediaMetadataInit, positionState,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -108,4 +110,89 @@ test("unwrap", () => {
   );
   assert.throws(() => unwrap({}), (err) => err.message === "unexpected reply" && err.code === null);
   assert.throws(() => unwrap(null), (err) => err.code === null);
+});
+
+test("formatDuration", () => {
+  assert.equal(formatDuration(0), "0 min");
+  assert.equal(formatDuration(59), "0 min");
+  assert.equal(formatDuration(60), "1 min");
+  assert.equal(formatDuration(14 * 60 + 20), "14 min");
+  assert.equal(formatDuration(3600), "1 h");
+  assert.equal(formatDuration(3600 + 14 * 60), "1 h 14 min");
+  assert.equal(formatDuration(7200), "2 h");
+  assert.equal(formatDuration(-1), "0 min");
+  assert.equal(formatDuration(NaN), "0 min");
+  assert.equal(formatDuration(undefined), "0 min");
+});
+
+test("queueSummary", () => {
+  assert.equal(queueSummary([]), "");
+  assert.equal(queueSummary([{ duration: 240 }]), "1 track, 4 min");
+  assert.equal(queueSummary([{ duration: 240 }, {}]), "2 tracks, 4 min");
+  const many = Array.from({ length: 22 }, () => ({ duration: (74 * 60) / 22 }));
+  assert.equal(queueSummary(many), "22 tracks, 1 h 14 min");
+});
+
+test("progressFraction", () => {
+  assert.equal(progressFraction(50, 200), 0.25);
+  assert.equal(progressFraction(300, 200), 1);
+  assert.equal(progressFraction(-5, 200), 0);
+  assert.equal(progressFraction(10, 0), 0);
+  assert.equal(progressFraction(10, -3), 0);
+  assert.equal(progressFraction(10, NaN), 0);
+  assert.equal(progressFraction(NaN, 10), 0);
+});
+
+test("trackArtistIfDifferent", () => {
+  assert.equal(trackArtistIfDifferent({ artist: "Muse" }, "Muse"), "");
+  assert.equal(trackArtistIfDifferent({ artist: " muse " }, "MUSE"), "");
+  assert.equal(trackArtistIfDifferent({ artist: "Muse feat. X" }, "Muse"), "Muse feat. X");
+  assert.equal(trackArtistIfDifferent({}, "Muse"), "");
+  assert.equal(trackArtistIfDifferent({ artist: "A" }, undefined), "A");
+});
+
+test("silenceWav", () => {
+  const wav = silenceWav();
+  assert.ok(wav instanceof Uint8Array);
+  assert.equal(wav.length, 44 + 10 * 8000);
+  const text = (a, b) => String.fromCharCode(...wav.slice(a, b));
+  assert.equal(text(0, 4), "RIFF");
+  assert.equal(text(8, 12), "WAVE");
+  assert.equal(text(12, 16), "fmt ");
+  assert.equal(text(36, 40), "data");
+  const v = new DataView(wav.buffer);
+  assert.equal(v.getUint32(4, true), wav.length - 8);
+  assert.equal(v.getUint32(16, true), 16);
+  assert.equal(v.getUint16(20, true), 1);
+  assert.equal(v.getUint16(22, true), 1);
+  assert.equal(v.getUint32(24, true), 8000);
+  assert.equal(v.getUint32(28, true), 8000);
+  assert.equal(v.getUint16(32, true), 1);
+  assert.equal(v.getUint16(34, true), 8);
+  assert.equal(v.getUint32(40, true), 80000);
+  assert.ok(wav.slice(44).every((b) => b === 128));
+  const small = silenceWav(1, 100);
+  assert.equal(small.length, 144);
+  assert.equal(new DataView(small.buffer).getUint32(24, true), 100);
+});
+
+test("mediaMetadataInit", () => {
+  const cover = (id, size) => `/c/${id}/${size}`;
+  assert.deepEqual(
+    mediaMetadataInit({ title: "T", artist: "A", album: "B", coverArt: "c1" }, cover),
+    { title: "T", artist: "A", album: "B", artwork: [{ src: "/c/c1/512", sizes: "512x512" }] },
+  );
+  assert.deepEqual(mediaMetadataInit({ title: "T" }, cover), { title: "T", artist: "", album: "", artwork: [] });
+  assert.deepEqual(mediaMetadataInit(null, cover), { title: "", artist: "", album: "", artwork: [] });
+});
+
+test("positionState", () => {
+  assert.deepEqual(positionState(10, 100), { duration: 100, position: 10, playbackRate: 1 });
+  assert.deepEqual(positionState(150, 100), { duration: 100, position: 100, playbackRate: 1 });
+  assert.deepEqual(positionState(-4, 100), { duration: 100, position: 0, playbackRate: 1 });
+  assert.equal(positionState(5, 0), null);
+  assert.equal(positionState(5, -1), null);
+  assert.equal(positionState(5, NaN), null);
+  assert.equal(positionState(5, Infinity), null);
+  assert.equal(positionState(5, undefined), null);
 });

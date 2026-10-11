@@ -70,3 +70,76 @@ export function unwrap(json) {
   err.code = body && body.error && body.error.code !== undefined ? body.error.code : null;
   throw err;
 }
+
+export function formatDuration(totalSeconds) {
+  const n = Number(totalSeconds);
+  if (!Number.isFinite(n) || n < 0) return "0 min";
+  const minutes = Math.floor(n / 60);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
+}
+
+export function queueSummary(entries) {
+  if (!entries || entries.length === 0) return "";
+  const total = entries.reduce((sum, e) => sum + (Number(e && e.duration) || 0), 0);
+  const noun = entries.length === 1 ? "track" : "tracks";
+  return `${entries.length} ${noun}, ${formatDuration(total)}`;
+}
+
+export function progressFraction(position, duration) {
+  const d = Number(duration);
+  if (!(d > 0) || !Number.isFinite(d)) return 0;
+  const p = Number(position);
+  if (!Number.isFinite(p)) return 0;
+  return Math.min(1, Math.max(0, p / d));
+}
+
+export function trackArtistIfDifferent(song, albumArtist) {
+  const artist = (song && song.artist) || "";
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  return norm(artist) === norm(albumArtist) ? "" : artist;
+}
+
+export function silenceWav(seconds = 10, sampleRate = 8000) {
+  const dataSize = seconds * sampleRate;
+  const out = new Uint8Array(44 + dataSize);
+  const view = new DataView(out.buffer);
+  const tag = (offset, text) => {
+    for (let i = 0; i < text.length; i++) out[offset + i] = text.charCodeAt(i);
+  };
+  tag(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate, true);
+  view.setUint16(32, 1, true);
+  view.setUint16(34, 8, true);
+  tag(36, "data");
+  view.setUint32(40, dataSize, true);
+  out.fill(128, 44);
+  return out;
+}
+
+export function mediaMetadataInit(song, coverUrl) {
+  const s = song || {};
+  return {
+    title: s.title || "",
+    artist: s.artist || "",
+    album: s.album || "",
+    artwork: s.coverArt ? [{ src: coverUrl(s.coverArt, 512), sizes: "512x512" }] : [],
+  };
+}
+
+export function positionState(position, duration) {
+  const d = Number(duration);
+  if (!(d > 0) || !Number.isFinite(d)) return null;
+  const p = Number(position);
+  const safe = Number.isFinite(p) ? Math.max(0, p) : 0;
+  return { duration: d, position: Math.min(safe, d), playbackRate: 1 };
+}

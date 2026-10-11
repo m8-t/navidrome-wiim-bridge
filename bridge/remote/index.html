@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#121316">
+<meta name="theme-color" content="#0d0e11">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>WiiM Remote</title>
 <link rel="stylesheet" href="remote.css">
@@ -12,69 +12,181 @@
 <div id="status" class="status" role="status" hidden></div>
 
 <main id="login" class="login" hidden>
-  <form id="login-form">
+  <form id="login-form" class="login-card">
     <h1>WiiM Remote</h1>
-    <label>User <input id="login-user" name="username" autocomplete="username" autocapitalize="none" required></label>
-    <label>Password <input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
+    <label class="field"><span>User</span><input id="login-user" name="username" autocomplete="username" autocapitalize="none" required></label>
+    <label class="field"><span>Password</span><input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
     <p id="login-error" class="error" role="alert"></p>
-    <button type="submit" class="primary">Sign in</button>
+    <button type="submit" class="btn accent block">Sign in</button>
   </form>
 </main>
 
 <div id="app" class="app" hidden>
   <section id="tab-player" class="tab player" data-tab="player">
-    <div class="cover-wrap"><img id="cover" class="cover" alt="" hidden></div>
-    <div class="controls">
-      <p id="empty" class="empty" hidden>Nothing queued. Pick an album in Library.</p>
-      <div id="meta" class="meta">
-        <div id="title" class="title"></div>
-        <div id="artist" class="artist"></div>
-        <div id="album" class="album"></div>
+    <div class="backdrop" aria-hidden="true"><img id="backdrop" alt="" hidden></div>
+    <div class="player-inner">
+      <div id="player-main" class="player-main">
+        <div class="cover-wrap">
+          <img id="cover" class="cover" alt="" hidden>
+          <div id="cover-ph" class="cover cover-ph" aria-hidden="true"><span class="ic" data-icon="music"></span></div>
+        </div>
+        <div class="info">
+          <div id="meta" class="meta">
+            <div id="title" class="title"></div>
+            <div id="artist" class="artist"></div>
+            <div id="album" class="album"></div>
+          </div>
+          <div class="seek">
+            <input id="seek" class="slider" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
+            <div class="times"><span id="elapsed" class="time">0:00</span><span id="total" class="time">0:00</span></div>
+          </div>
+          <div class="transport">
+            <button id="prev" type="button" class="round r56" aria-label="Previous" title="Previous"><span class="ic" data-icon="previous"></span></button>
+            <button id="play" type="button" class="round r72 accent" aria-label="Play" title="Play"><span class="ic" data-icon="play"></span></button>
+            <button id="next" type="button" class="round r56" aria-label="Next" title="Next"><span class="ic" data-icon="next"></span></button>
+          </div>
+        </div>
       </div>
-      <div class="seek">
-        <span id="elapsed" class="time">0:00</span>
-        <input id="seek" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
-        <span id="total" class="time">0:00</span>
-      </div>
-      <div class="transport">
-        <button id="prev" type="button">Previous</button>
-        <button id="play" type="button" class="primary big">Play</button>
-        <button id="next" type="button">Next</button>
+      <div id="empty" class="empty" hidden>
+        <p>Nothing queued</p>
+        <button id="empty-open" type="button" class="btn accent">Open library</button>
       </div>
       <div class="volume">
-        <button id="mute" type="button" aria-pressed="false">Mute</button>
-        <input id="volume" type="range" min="0" max="100" step="1" value="0" aria-label="Volume">
-        <span id="volume-label" class="time">0</span>
+        <button id="mute" type="button" class="round r44" aria-pressed="false" aria-label="Mute" title="Mute"><span class="ic" data-icon="volume"></span></button>
+        <input id="volume" class="slider" type="range" min="0" max="100" step="1" value="0" aria-label="Volume">
+        <span id="volume-label" class="time vol-num">0</span>
       </div>
     </div>
   </section>
 
   <section id="tab-queue" class="tab" data-tab="queue" hidden>
-    <div class="bar"><button id="clear" type="button">Clear queue</button></div>
+    <header class="head">
+      <div class="head-text">
+        <h1>Queue</h1>
+        <p id="queue-summary" class="sub"></p>
+      </div>
+      <button id="clear" type="button" class="textbtn">Clear</button>
+    </header>
     <ul id="queue" class="list"></ul>
   </section>
 
   <section id="tab-library" class="tab" data-tab="library" hidden>
-    <div class="bar"><input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off"></div>
-    <div id="library-list" class="list scroll"></div>
-    <div id="album-view" class="album-view" hidden>
-      <div class="bar">
-        <button id="album-back" type="button">Back</button>
-        <button id="album-play" type="button" class="primary">Play album</button>
-        <button id="album-add" type="button">Add to queue</button>
+    <div id="library-bar" class="searchbar">
+      <div class="search-field">
+        <span class="ic lead" data-icon="search"></span>
+        <input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off">
+        <button id="search-clear" type="button" class="round r44 plain" aria-label="Clear search" title="Clear search" hidden><span class="ic" data-icon="close"></span></button>
       </div>
-      <h2 id="album-name" class="album-name"></h2>
-      <ul id="album-tracks" class="list"></ul>
+      <button id="open-settings" type="button" class="round r44 plain" aria-label="Settings" title="Settings"><span class="ic" data-icon="settings"></span></button>
     </div>
-    <div id="library-footer" class="footer"><button id="signout" type="button">Sign out</button></div>
+    <div id="library-list" class="scroll"></div>
+    <div id="album-view" class="album-view scroll" hidden>
+      <button id="album-back" type="button" class="round r44 plain back" aria-label="Back" title="Back"><span class="ic" data-icon="back"></span></button>
+      <div class="album-head">
+        <div class="thumb album-cover"><img id="album-cover" alt="" hidden><span class="ic" data-icon="music"></span></div>
+        <div class="album-text">
+          <h2 id="album-name" class="album-name"></h2>
+          <p id="album-artist" class="sub"></p>
+          <p id="album-info" class="sub"></p>
+        </div>
+      </div>
+      <div class="album-actions">
+        <button id="album-play" type="button" class="btn accent"><span class="ic" data-icon="play"></span>Play</button>
+        <button id="album-add" type="button" class="btn raised"><span class="ic" data-icon="plus"></span>Add to queue</button>
+      </div>
+      <ul id="album-tracks" class="list tracks"></ul>
+    </div>
   </section>
 
+  <div id="mini" class="mini" hidden>
+    <div class="mini-progress" aria-hidden="true"><i id="mini-fill"></i></div>
+    <button id="mini-open" type="button" class="mini-open" aria-label="Open player" title="Open player">
+      <span class="thumb"><img id="mini-cover" alt="" hidden><span class="ic" data-icon="music"></span></span>
+      <span class="text"><span id="mini-title" class="name"></span><span id="mini-artist" class="sub"></span></span>
+    </button>
+    <button id="mini-play" type="button" class="round r44 plain" aria-label="Play" title="Play"><span class="ic" data-icon="play"></span></button>
+    <button id="mini-next" type="button" class="round r44 plain" aria-label="Next" title="Next"><span class="ic" data-icon="next"></span></button>
+  </div>
+
   <nav class="tabs" aria-label="Sections">
-    <button type="button" data-go="player" aria-current="true">Player</button>
-    <button type="button" data-go="queue">Queue</button>
-    <button type="button" data-go="library">Library</button>
+    <button type="button" data-go="player" aria-current="true"><span class="ic" data-icon="play"></span><span class="lbl">Player</span></button>
+    <button type="button" data-go="queue"><span class="ic" data-icon="queue"></span><span class="lbl">Queue</span></button>
+    <button type="button" data-go="library"><span class="ic" data-icon="library"></span><span class="lbl">Library</span></button>
   </nav>
 </div>
+
+<div id="sheet" class="sheet-root" hidden>
+  <div id="sheet-dim" class="sheet-dim"></div>
+  <div id="sheet-panel" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
+    <div class="sheet-head">
+      <h2 id="sheet-title">Settings</h2>
+      <button id="sheet-close" type="button" class="round r44 plain" aria-label="Close" title="Close"><span class="ic" data-icon="close"></span></button>
+    </div>
+    <p id="sheet-user" class="sub"></p>
+    <label class="switch-row">
+      <span class="switch-text">
+        <span class="switch-label">Lock screen controls</span>
+        <span id="lock-help" class="sub"></span>
+      </span>
+      <input id="lock-switch" type="checkbox" role="switch" class="switch">
+    </label>
+    <button id="signout" type="button" class="btn raised block danger">Sign out</button>
+  </div>
+</div>
+
+<template id="tpl-queue-row">
+  <li class="row">
+    <button type="button" class="main">
+      <span class="thumb"><img alt="" loading="lazy" hidden><span class="ic" data-icon="music"></span></span>
+      <span class="text"><span class="name"></span><span class="sub"></span></span>
+      <span class="dur"></span>
+      <span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>
+    </button>
+    <button type="button" class="round r44 plain remove" aria-label="Remove from queue" title="Remove from queue"><span class="ic" data-icon="close"></span></button>
+  </li>
+</template>
+
+<template id="tpl-album-card">
+  <button type="button" class="card">
+    <span class="thumb"><img alt="" loading="lazy" hidden><span class="ic" data-icon="music"></span></span>
+    <span class="card-name"></span>
+    <span class="sub"></span>
+  </button>
+</template>
+
+<template id="tpl-song-row">
+  <li class="row">
+    <span class="text"><span class="name"></span><span class="sub"></span></span>
+    <button type="button" class="round r44 plain act-play" aria-label="Play" title="Play"><span class="ic" data-icon="play"></span></button>
+    <button type="button" class="round r44 plain act-add" aria-label="Add to queue" title="Add to queue"><span class="ic" data-icon="plus"></span></button>
+  </li>
+</template>
+
+<template id="tpl-track-row">
+  <li class="row">
+    <button type="button" class="main">
+      <span class="num"></span>
+      <span class="text"><span class="name"></span><span class="sub"></span></span>
+      <span class="dur"></span>
+    </button>
+  </li>
+</template>
+
+<template id="icon-play"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M8 5v14l11-7z"/></svg></template>
+<template id="icon-pause"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg></template>
+<template id="icon-previous"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6 5h2.5v14H6zM20 5v14L9.5 12z"/></svg></template>
+<template id="icon-next"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M15.5 5H18v14h-2.5zM4 5l10.5 7L4 19z"/></svg></template>
+<template id="icon-volume"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 9v6h4l5 4V5L7 9zM14.5 8.5a5 5 0 0 1 0 7l-1.4-1.4a3 3 0 0 0 0-4.2zM17.4 5.6a9 9 0 0 1 0 12.8L16 17a7 7 0 0 0 0-10z"/></svg></template>
+<template id="icon-volume-muted"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 9v6h4l5 4V5L7 9zM15.4 9.7l1.4-1.4 2.1 2.1 2.1-2.1 1.4 1.4-2.1 2.1 2.1 2.1-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/></svg></template>
+<template id="icon-queue"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h10v2H3zM16 14v6l5-3z"/></svg></template>
+<template id="icon-library"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg></template>
+<template id="icon-search"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.3 4.3-1.4 1.4-4.3-4.3A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg></template>
+<template id="icon-close"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6l5.6-5.6L5 6.4z"/></svg></template>
+<template id="icon-plus"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg></template>
+<template id="icon-back"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M14.6 4.6L16 6l-6 6 6 6-1.4 1.4L7.2 12z"/></svg></template>
+<template id="icon-settings"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 6h9v2H3zM16 6h5v2h-5zM3 16h5v2H3zM12 16h9v2h-9z"/><circle cx="14" cy="7" r="3"/><circle cx="10" cy="17" r="3"/></svg></template>
+<template id="icon-music"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 4v10.3a3.5 3.5 0 1 0 2 3.2V8h6V4z"/></svg></template>
+
 <script type="module" src="remote.js"></script>
 </body>
 </html>
