@@ -30,6 +30,8 @@ const SWIPE_MIN_PX = 60;
 const SWIPE_MIN_FRACTION = 0.2;
 const SWIPE_HORIZONTAL_RATIO = 1.5;
 const SWIPE_MAX_MS = 800;
+const SWIPE_LONG_FRACTION = 0.4;
+const SWIPE_RUBBER = 0.3;
 
 export function swipeAction(dx, dy, dtMs, width) {
   if (![dx, dy, dtMs].every(Number.isFinite)) return null;
@@ -38,8 +40,19 @@ export function swipeAction(dx, dy, dtMs, width) {
     : SWIPE_MIN_PX;
   if (Math.abs(dx) < threshold) return null;
   if (!(Math.abs(dx) > SWIPE_HORIZONTAL_RATIO * Math.abs(dy))) return null;
-  if (dtMs > SWIPE_MAX_MS) return null;
+  const long = Number.isFinite(width) && width > 0 && Math.abs(dx) >= width * SWIPE_LONG_FRACTION;
+  if (dtMs > SWIPE_MAX_MS && !long) return null;
   return dx < 0 ? "next" : "previous";
+}
+
+export function swipeOffset(dx, hasNeighbour) {
+  return hasNeighbour ? dx : dx * SWIPE_RUBBER;
+}
+
+export function swipeNeighbour(dx, index, length) {
+  if (!(length > 0) || !Number.isFinite(dx) || dx === 0) return null;
+  const target = dx < 0 ? index + 1 : index - 1;
+  return target >= 0 && target < length ? target : null;
 }
 
 export function swipeTarget(action, index, length) {

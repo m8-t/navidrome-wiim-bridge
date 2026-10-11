@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, swipeAction, swipeTarget,
+  mediaMetadataInit, positionState, swipeAction, swipeTarget, swipeOffset, swipeNeighbour,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -229,4 +229,34 @@ test("swipeTarget", () => {
   assert.equal(swipeTarget("previous", 3, 0), null);
   assert.equal(swipeTarget("sideways", 2, 5), null);
   assert.equal(swipeTarget(null, 2, 5), null);
+});
+
+test("swipeAction long drags", () => {
+  assert.equal(swipeAction(-160, 0, 2000, 400), "next");
+  assert.equal(swipeAction(160, 0, 2000, 400), "previous");
+  assert.equal(swipeAction(-159, 0, 801, 400), null);
+  assert.equal(swipeAction(-160, 300, 2000, 400), null);
+  assert.equal(swipeAction(-1000, 900, 100, 400), null);
+  assert.equal(swipeAction(-1000, 900, 2000, 400), null);
+  assert.equal(swipeAction(-100, 0, 2000, 0), null);
+});
+
+test("swipeOffset", () => {
+  assert.equal(swipeOffset(-100, true), -100);
+  assert.equal(swipeOffset(100, true), 100);
+  assert.ok(Math.abs(swipeOffset(100, false) - 30) < 1e-9);
+  assert.ok(Math.abs(swipeOffset(-100, false) + 30) < 1e-9);
+  assert.equal(swipeOffset(0, false), 0);
+});
+
+test("swipeNeighbour", () => {
+  assert.equal(swipeNeighbour(-50, 2, 5), 3);
+  assert.equal(swipeNeighbour(50, 2, 5), 1);
+  assert.equal(swipeNeighbour(50, 0, 5), null);
+  assert.equal(swipeNeighbour(-50, 4, 5), null);
+  assert.equal(swipeNeighbour(-50, 0, 5), 1);
+  assert.equal(swipeNeighbour(50, 4, 5), 3);
+  assert.equal(swipeNeighbour(-50, 0, 0), null);
+  assert.equal(swipeNeighbour(0, 2, 5), null);
+  assert.equal(swipeNeighbour(NaN, 2, 5), null);
 });

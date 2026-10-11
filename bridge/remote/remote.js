@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState,
@@ -13,7 +13,8 @@ const TICK_MS = 500;
 const GAIN_HOLD_MS = 1500;
 const STATUS_MS = 4000;
 const SWIPE_FEEDBACK_PX = 8;
-const SWIPE_DAMPING = 0.5;
+const SWIPE_GAP_PX = 24;
+const SWIPE_ANIM_MS = 250;
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) => $(`icon-${name}`).content.cloneNode(true);
@@ -48,6 +49,8 @@ let status = { currentIndex: 0, playing: false, gain: 0, position: 0, muted: fal
 let entries = [];
 let polledAt = Date.now();
 let generation = 0;
+let pendingCommands = 0;
+let coverBusy = false;
 let pollInFlight = false;
 let pollAgain = false;
 let queueChain = Promise.resolve();
@@ -192,14 +195,7 @@ function setPlayIcon(button) {
   button.title = label;
 }
 
-function render() {
-  const song = currentSong();
-  const hasQueue = entries.length > 0;
-  $("empty").hidden = hasQueue;
-  $("player-main").hidden = !hasQueue;
-  $("title").textContent = song ? song.title || "" : "";
-  $("artist").textContent = song ? song.artist || "" : "";
-  $("album").textContent = song ? song.album || "" : "";
+function showCover(song) {
   const cover = $("cover");
   const backdrop = $("backdrop");
   if (song && song.coverArt) {
@@ -216,6 +212,17 @@ function render() {
     backdrop.removeAttribute("src");
     $("cover-ph").hidden = false;
   }
+}
+
+function render() {
+  const song = currentSong();
+  const hasQueue = entries.length > 0;
+  $("empty").hidden = hasQueue;
+  $("player-main").hidden = !hasQueue;
+  $("title").textContent = song ? song.title || "" : "";
+  $("artist").textContent = song ? song.artist || "" : "";
+  $("album").textContent = song ? song.album || "" : "";
+  if (!coverBusy) showCover(song);
   const duration = song ? Number(song.duration) || 0 : 0;
   $("seek").max = String(duration);
   $("total").textContent = formatTime(duration);
@@ -319,7 +326,10 @@ function runCommands(calls) {
     if (auth && refresh) poll();
     return ok;
   };
-  const result = queueChain.then(task);
+  pendingCommands += 1;
+  const result = queueChain.then(task).finally(() => {
+    pendingCommands -= 1;
+  });
   queueChain = result.catch(() => {});
   return result;
 }
@@ -335,7 +345,7 @@ async function poll() {
   const sent = generation;
   try {
     const body = await api("jukeboxControl", { action: "get" });
-    if (sent === generation && auth) {
+    if (sent === generation && pendingCommands === 0 && auth) {
       const list = body.jukeboxPlaylist;
       applyStatus(list, Array.isArray(list.entry) ? list.entry : []);
     }
@@ -402,40 +412,116 @@ function seekTo(seconds) {
 
 function bindCoverSwipe() {
   const wrap = $("cover-wrap");
-  const covers = [$("cover"), $("cover-ph")];
+  const main = [$("cover"), $("cover-ph")];
+  const ghost = $("cover-ghost");
+  const ghostImg = ghost.querySelector("img");
+  const ghostIcon = ghost.querySelector(".ic");
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   let start = null;
-  const shift = (px) => {
-    for (const node of covers) node.style.transform = px ? `translateX(${px}px)` : "";
+  let anim = null;
+  const place = (mainPx, ghostPx) => {
+    for (const node of main) node.style.transform = mainPx ? `translateX(${mainPx}px)` : "";
+    ghost.style.transform = ghostPx ? `translateX(${ghostPx}px)` : "";
   };
-  const reset = () => {
-    start = null;
+  const fillGhost = (song) => {
+    const art = song && song.coverArt;
+    if (art) {
+      const url = coverUrl(art, 600);
+      if (ghostImg.getAttribute("src") !== url) ghostImg.src = url;
+    } else {
+      ghostImg.removeAttribute("src");
+    }
+    ghostImg.hidden = !art;
+    ghostIcon.hidden = Boolean(art);
+  };
+  const settle = () => {
+    wrap.classList.add("swiping");
+    place(0, 0);
+    coverBusy = false;
+    render();
+    ghost.hidden = true;
+    void wrap.offsetWidth;
     wrap.classList.remove("swiping");
-    shift(0);
+  };
+  const animate = (mainPx, ghostPx) => {
+    let timer = null;
+    const finish = () => {
+      if (anim !== job) return;
+      anim = null;
+      clearTimeout(timer);
+      wrap.removeEventListener("transitionend", onEnd);
+      settle();
+    };
+    const onEnd = (event) => {
+      if (event.propertyName === "transform") finish();
+    };
+    const job = { finish };
+    anim = job;
+    wrap.classList.remove("swiping");
+    void wrap.offsetWidth;
+    place(mainPx, ghostPx);
+    wrap.addEventListener("transitionend", onEnd);
+    timer = setTimeout(finish, SWIPE_ANIM_MS + 100);
+  };
+  const abort = () => {
+    const drag = start;
+    start = null;
+    if (!drag || !drag.active) return;
+    animate(0, drag.side * drag.span);
   };
   wrap.addEventListener("pointerdown", (event) => {
     if (start || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
-    start = { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp };
+    if (anim) anim.finish();
+    start = { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp, active: false };
     wrap.setPointerCapture(event.pointerId);
   });
   wrap.addEventListener("pointermove", (event) => {
-    if (!start || event.pointerId !== start.id) return;
+    if (!start || event.pointerId !== start.id || reduced.matches) return;
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
-    if (Math.abs(dx) < SWIPE_FEEDBACK_PX || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
-    wrap.classList.add("swiping");
-    shift(dx * SWIPE_DAMPING);
+    if (!start.active) {
+      if (Math.abs(dx) < SWIPE_FEEDBACK_PX || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
+      const visible = main.find((node) => !node.hidden);
+      start.width = visible.getBoundingClientRect().width;
+      start.span = start.width + SWIPE_GAP_PX;
+      start.side = 0;
+      start.active = true;
+      coverBusy = true;
+      wrap.classList.add("swiping");
+    }
+    const side = dx < 0 ? 1 : -1;
+    const index = swipeNeighbour(dx, status.currentIndex, entries.length);
+    const has = index !== null;
+    if (side !== start.side) {
+      start.side = side;
+      ghost.hidden = !has;
+      if (has) fillGhost(entries[index]);
+    }
+    place(swipeOffset(dx, has), has ? dx + side * start.span : 0);
   });
   wrap.addEventListener("pointerup", (event) => {
     if (!start || event.pointerId !== start.id) return;
+    const drag = start;
+    const dx = event.clientX - drag.x;
     const action = swipeAction(
-      event.clientX - start.x, event.clientY - start.y, event.timeStamp - start.t, wrap.clientWidth,
+      dx, event.clientY - drag.y, event.timeStamp - drag.t, drag.width || wrap.clientWidth,
     );
-    reset();
     const index = swipeTarget(action, status.currentIndex, entries.length);
-    if (index !== null) runCommands([{ action: "skip", index, offset: 0 }]);
+    if (index === null) return abort();
+    start = null;
+    status = { ...status, currentIndex: index, position: 0 };
+    polledAt = Date.now();
+    runCommands([{ action: "skip", index, offset: 0 }]).then((ok) => {
+      if (!ok) poll();
+    });
+    if (drag.active) animate(-drag.side * drag.span, 0);
+    else render();
   });
   wrap.addEventListener("pointercancel", (event) => {
-    if (start && event.pointerId === start.id) reset();
+    if (start && event.pointerId === start.id) abort();
+  });
+  wrap.addEventListener("lostpointercapture", (event) => {
+    if (start && event.pointerId === start.id) abort();
   });
 }
 
