@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
@@ -53,6 +54,8 @@ class FakeUpstream:
         song_id = request.query.get("id")
         if song_id == "missing":
             return web.Response(text=MISSING_BODY, content_type="application/json")
+        if song_id == "gone":
+            return web.Response(status=404, text="nope")
         if song_id == "cut":
             return await self.truncated(request)
         headers = {"Content-Type": "audio/flac", "Accept-Ranges": "bytes"}
@@ -105,12 +108,14 @@ def make_config(navidrome_url: str, log_path: Path) -> bp.ProxyConfig:
 
 
 @asynccontextmanager
-async def rig(tmp_path: Path) -> AsyncIterator[Rig]:
+async def rig(tmp_path: Path, describe: bp.Describe | None = None) -> AsyncIterator[Rig]:
     upstream = FakeUpstream()
     log_path = tmp_path / "log.jsonl"
     async with TestServer(upstream.app) as fake:
         config = make_config(str(fake.make_url("")).rstrip("/"), log_path)
-        async with TestClient(TestServer(bp.create_app(config))) as client:
+        app = web.Application()
+        bp.add_proxy_routes(app, config, describe=describe)
+        async with TestClient(TestServer(app)) as client:
             yield Rig(client, upstream, log_path)
 
 
@@ -658,3 +663,91 @@ def test_config_repr_hides_secrets(tmp_path: Path) -> None:
     assert "pw" not in text.replace("pwd", "")
     assert "abcd" not in text
     assert SECRET not in text
+
+
+def describe_abc(song_id: str) -> tuple[str, str] | None:
+    return ("Art - Title", "Alb") if song_id == "abc" else None
+
+
+def proxy_lines(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
+    return [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "bridge.proxy"]
+
+
+def fetch_and_log(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    name: str,
+    *,
+    describe: bp.Describe | None = describe_abc,
+    headers: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
+    caplog.set_level(logging.INFO)
+
+    async def scenario() -> None:
+        async with rig(tmp_path, describe) as r:
+            resp = await r.client.get(url("range", name), headers=headers)
+            try:
+                await resp.read()
+            except aiohttp.ClientError:
+                pass
+            await asyncio.sleep(0.2)
+
+    drive(scenario())
+    return proxy_lines(caplog)
+
+
+def test_proxy_names_the_track_in_both_lines(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    lines = fetch_and_log(tmp_path, caplog, "abc.flac")
+    assert lines == [
+        ("INFO", 'device fetches "Art - Title" from "Alb"'),
+        ("INFO", 'sent "Art - Title": 200 kB, complete'),
+    ]
+    assert not any("abc" in message for _, message in lines)
+
+
+def test_proxy_omits_empty_album(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lines = fetch_and_log(tmp_path, caplog, "abc.flac", describe=lambda _id: ("Solo", ""))
+    assert lines[0] == ("INFO", 'device fetches "Solo"')
+
+
+def test_proxy_without_description_uses_song_id(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    lines = fetch_and_log(tmp_path, caplog, "abc.flac", describe=None)
+    assert lines == [
+        ("INFO", "device fetches song abc"),
+        ("INFO", "sent song abc: 200 kB, complete"),
+    ]
+    unknown = fetch_and_log(tmp_path, caplog, "other.flac")
+    assert unknown[-2] == ("INFO", "device fetches song other")
+
+
+@pytest.mark.parametrize(
+    ("header", "suffix"),
+    [
+        ("bytes=1000-", " (range 1000-)"),
+        ("bytes=1000-1999", " (range 1000-1999)"),
+        ("bytes=0-", ""),
+        (None, ""),
+    ],
+)
+def test_proxy_shows_range_unless_from_start(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, header: str | None, suffix: str
+) -> None:
+    headers = None if header is None else {"Range": header}
+    lines = fetch_and_log(tmp_path, caplog, "abc.flac", headers=headers)
+    assert lines[0] == ("INFO", 'device fetches "Art - Title" from "Alb"' + suffix)
+
+
+def test_proxy_aborted_transfer_says_aborted(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    lines = fetch_and_log(tmp_path, caplog, "cut.flac", describe=lambda _id: ("Cut", "Alb"))
+    assert lines[-1] == ("INFO", 'sent "Cut": 50 kB, aborted')
+
+
+def test_proxy_upstream_404_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    lines = fetch_and_log(tmp_path, caplog, "gone.flac", describe=lambda _id: ("Gone", "Alb"))
+    assert lines[-1] == ("WARNING", 'could not send "Gone": upstream answered 404')

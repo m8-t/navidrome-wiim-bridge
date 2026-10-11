@@ -9,7 +9,7 @@ from typing import Any
 
 from aiohttp import web
 
-from bridge.log import redact
+from bridge.log import clean, redact, song_label
 from bridge.player import Player, PlayerError, Track
 from bridge.soap import UpnpError
 from bridge.wiim import REQUEST_ERRORS
@@ -28,6 +28,7 @@ ENVELOPE_BASE = {
 WRONG_LOGIN = 40
 QUIET_ACTIONS = frozenset({"get", "status"})
 PATHS = ("/rest/jukeboxControl", "/rest/jukeboxControl.view")
+MEMORY_SIZE = 500
 SEEK_WAIT_STEP = 0.25
 SEEK_WAIT_TIMEOUT = 8.0
 SEEK_FRESH_TIMEOUT = 4.0
@@ -82,6 +83,7 @@ class Jukebox:
         self._sleep = sleep
         self._clock = clock
         self.songs: list[Mapping[str, Any]] = []
+        self._seen: dict[str, Mapping[str, Any]] = {}
         self.current = 0
         self.gain = 0.5
         self.muted = False
@@ -126,6 +128,27 @@ class Jukebox:
         except (UpnpError, PlayerError, ValueError, *REQUEST_ERRORS) as exc:
             raise JukeboxError(0, str(exc) or type(exc).__name__) from exc
         return self._payload(action)
+
+    def _remember(self, songs: Sequence[Mapping[str, Any]]) -> None:
+        for song in songs:
+            key = str(song["id"])
+            self._seen.pop(key, None)
+            self._seen[key] = song
+        while len(self._seen) > MEMORY_SIZE:
+            del self._seen[next(iter(self._seen))]
+
+    def describe(self, song_id: str) -> tuple[str, str] | None:
+        song = next((s for s in self.songs if str(s["id"]) == song_id), None)
+        if song is None:
+            song = self._seen.get(song_id)
+        if song is None:
+            return None
+        return song_label(song), clean(str(song.get("album") or ""))
+
+    def current_label(self) -> str | None:
+        if 0 <= self.current < len(self.songs):
+            return song_label(self.songs[self.current])
+        return None
 
     def _status(self) -> dict[str, Any]:
         return {
@@ -227,6 +250,7 @@ class Jukebox:
 
     async def _set(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         songs = await self._lookup_all(ids)
+        self._remember(songs)
         if self.loaded:
             await self._player.clear()
         self.songs = songs
@@ -237,6 +261,7 @@ class Jukebox:
 
     async def _add(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         songs = await self._lookup_all(ids)
+        self._remember(songs)
         if self.loaded:
             await self._player.append([track_from_song(song) for song in songs])
         self.songs.extend(songs)
@@ -397,13 +422,21 @@ def add_jukebox_routes(
                     redact(exc.message),
                 )
             return reply(error_envelope(exc.code, exc.message))
+        suffix = ""
+        if action in ("skip", "start"):
+            label = jukebox.current_label()
+            suffix = f' track="{label}"' if label is not None else ""
+        elif action in ("set", "add") and ids:
+            described = jukebox.describe(ids[0])
+            suffix = f' first="{described[0]}"' if described is not None else ""
         logger.log(
             logging.DEBUG if action in QUIET_ACTIONS else logging.INFO,
-            "jukebox action=%s index=%s offset=%s ids=%d gain=%s mute=%s",
+            "jukebox action=%s index=%s offset=%s ids=%d gain=%s mute=%s%s",
             action,
             *("-" if value is None else value for value in (index, offset)),
             len(ids),
             *("-" if value is None else value for value in (gain, mute)),
+            suffix,
         )
         return reply(ok_envelope(payload))
 

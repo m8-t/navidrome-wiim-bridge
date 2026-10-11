@@ -49,7 +49,13 @@ GZ_BODY = gzip.compress(b"hello gzip " * 50)
 
 
 def song(song_id: str) -> dict[str, Any]:
-    return {"id": song_id, "title": song_id.upper(), "artist": "Art", "duration": 60}
+    return {
+        "id": song_id,
+        "title": song_id.upper(),
+        "artist": "Art",
+        "album": "Alb",
+        "duration": 60,
+    }
 
 
 class FakeNavidrome:
@@ -720,11 +726,35 @@ def test_audio_request_logs_at_info(tmp_path: Path, caplog: pytest.LogCaptureFix
         assert await resp.read() == PAYLOAD
 
     with_bridge(tmp_path, scenario)
-    (record,) = records_of(caplog, "bridge.proxy")
-    assert record.levelno == logging.INFO
-    assert record.getMessage() == (
-        f"#1 GET range a range=None status=200 bytes={len(PAYLOAD)} complete=True"
-    )
+    records = records_of(caplog, "bridge.proxy")
+    assert [r.levelno for r in records] == [logging.INFO, logging.INFO]
+    assert [r.getMessage() for r in records] == [
+        "device fetches song a",
+        "sent song a: 5 kB, complete",
+    ]
+
+
+def test_queued_track_is_named_in_proxy_and_jukebox_lines(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        await client.get("/rest/jukeboxControl?action=set&id=a&id=b&u=dan&p=pw")
+        await client.get("/rest/jukeboxControl?action=start&u=dan&p=pw")
+        resp = await client.get("/s/SECRET/range/a.flac", headers={"Range": "bytes=1000-"})
+        await resp.read()
+
+    with_bridge(tmp_path, scenario)
+    messages = [
+        r.getMessage() for r in caplog.records if r.name in ("bridge.proxy", "bridge.jukebox")
+    ]
+    assert messages == [
+        'jukebox action=set index=- offset=- ids=2 gain=- mute=- first="Art - A"',
+        'jukebox action=start index=- offset=- ids=0 gain=- mute=- track="Art - A"',
+        'device fetches "Art - A" from "Alb" (range 1000-)',
+        'sent "Art - A": 5 kB, complete',
+    ]
 
 
 def test_rejected_audio_request_logs_at_warning(
@@ -754,7 +784,9 @@ def test_jukebox_skip_logs_at_info(tmp_path: Path, caplog: pytest.LogCaptureFixt
     with_bridge(tmp_path, scenario)
     (record,) = records_of(caplog, "bridge.jukebox")
     assert record.levelno == logging.INFO
-    assert record.getMessage() == "jukebox action=skip index=1 offset=7 ids=0 gain=- mute=-"
+    assert record.getMessage() == (
+        'jukebox action=skip index=1 offset=7 ids=0 gain=- mute=- track="Art - B"'
+    )
 
 
 def test_jukebox_get_and_status_log_at_debug(
@@ -846,6 +878,7 @@ def test_round_trip_logs_contain_no_secrets(
     with_bridge(tmp_path, scenario)
     assert caplog.records
     text = caplog.text
+    assert 'device fetches "Art - A" from "Alb"' in text
     for forbidden in ("SECRET", "pw", "abcd", "good", "tokensalt"):
         assert forbidden not in text, forbidden
 

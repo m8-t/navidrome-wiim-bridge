@@ -193,17 +193,6 @@ def build_app(
 ) -> web.Application:
     app = web.Application()
     app[CONFIG_KEY] = config
-    add_proxy_routes(
-        app,
-        ProxyConfig(
-            navidrome_url=config.navidrome_url,
-            user=config.user,
-            password=config.password,
-            salt=config.salt,
-            secret=config.secret,
-            log_path=config.log_path,
-        ),
-    )
     if navidrome is not None:
         app[NAVIDROME_KEY] = navidrome
     else:
@@ -227,6 +216,18 @@ def build_app(
         wiim, lambda sid: stream_url(config, sid), config.queue_name, config.max_volume
     )
     jukebox = Jukebox(player, lookup)
+    add_proxy_routes(
+        app,
+        ProxyConfig(
+            navidrome_url=config.navidrome_url,
+            user=config.user,
+            password=config.password,
+            salt=config.salt,
+            secret=config.secret,
+            log_path=config.log_path,
+        ),
+        describe=jukebox.describe,
+    )
     if config.clear_on_start:
 
         async def clear_device_queue(app: web.Application) -> None:

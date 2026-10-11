@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +16,7 @@ from typing import Any, Protocol
 import aiohttp
 from aiohttp import web
 
+from bridge.log import clean, human_size
 from bridge.subsonic import UPSTREAM_HEADERS, subsonic_params
 
 logger = logging.getLogger("bridge.proxy")
@@ -129,6 +130,8 @@ CONFIG_KEY = web.AppKey("config", ProxyConfig)
 LOG_KEY = web.AppKey("log", RequestLog)
 COUNTER_KEY = web.AppKey("counter", itertools.count)
 SESSION_KEY = web.AppKey("session", aiohttp.ClientSession)
+Describe = Callable[[str], tuple[str, str] | None]
+DESCRIBE_KEY = web.AppKey("describe", Callable)
 
 
 def start_event(info: RequestInfo, request: web.Request) -> dict[str, Any]:
@@ -167,18 +170,34 @@ def end_event(info: RequestInfo, outcome: Outcome) -> dict[str, Any]:
     }
 
 
-def log_end(info: RequestInfo, outcome: Outcome) -> None:
-    logger.info(
-        "#%d %s %s %s range=%s status=%d bytes=%d complete=%s",
-        info.req,
-        info.method,
-        info.profile,
-        info.song_id,
-        info.range_header,
-        outcome.status,
-        outcome.body_bytes,
-        outcome.complete,
-    )
+def song_ref(app: web.Application, song_id: str) -> tuple[str, str]:
+    described = app[DESCRIBE_KEY](song_id)
+    if described is None:
+        return f"song {song_id}", ""
+    label, album = described
+    return f'"{label}"', album
+
+
+def log_start(app: web.Application, info: RequestInfo) -> str:
+    ref, album = song_ref(app, info.song_id)
+    text = f"device fetches {ref}"
+    if album:
+        text += f' from "{album}"'
+    if info.range_header is not None and info.range_header != "bytes=0-":
+        text += f" (range {clean(info.range_header.removeprefix('bytes='))})"
+    logger.info("%s", text)
+    return ref
+
+
+def log_end(ref: str, outcome: Outcome) -> None:
+    if not 200 <= outcome.status < 300:
+        failed = outcome.upstream_status
+        if failed is None or 200 <= failed < 300:
+            failed = outcome.status
+        logger.warning("could not send %s: upstream answered %d", ref, failed)
+        return
+    state = "complete" if outcome.complete else "aborted"
+    logger.info("sent %s: %s, %s", ref, human_size(outcome.body_bytes), state)
 
 
 def reject_reason(config: ProxyConfig, match: Mapping[str, str]) -> str | None:
@@ -310,12 +329,13 @@ async def handle_stream(request: web.Request) -> web.StreamResponse | web.Respon
         started=time.monotonic(),
     )
     log.write(start_event(info, request))
+    ref = log_start(request.app, info)
     outcome = Outcome()
     try:
         return await serve(request, info, outcome)
     finally:
         log.write(end_event(info, outcome))
-        log_end(info, outcome)
+        log_end(ref, outcome)
 
 
 async def upstream_session(app: web.Application) -> AsyncIterator[None]:
@@ -325,8 +345,11 @@ async def upstream_session(app: web.Application) -> AsyncIterator[None]:
         yield
 
 
-def add_proxy_routes(app: web.Application, config: ProxyConfig) -> None:
+def add_proxy_routes(
+    app: web.Application, config: ProxyConfig, *, describe: Describe | None = None
+) -> None:
     app[CONFIG_KEY] = config
+    app[DESCRIBE_KEY] = describe or (lambda song_id: None)
     app[LOG_KEY] = RequestLog(config.log_path)
     app[COUNTER_KEY] = itertools.count(1)
     app.cleanup_ctx.append(upstream_session)

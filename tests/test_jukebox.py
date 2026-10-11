@@ -707,3 +707,72 @@ def test_http_set_mute() -> None:
             assert "muted" in (await resp.json())["subsonic-response"]["jukeboxStatus"]
 
     run(scenario())
+
+
+def test_describe_known_unknown_and_first_match() -> None:
+    jb, _ = make()
+    do(jb, "set", ["a", "b", "a"])
+    assert jb.describe("a") == ("Art - A", "Alb")
+    assert jb.describe("b") == ("B", "")
+    assert jb.describe("zzz") is None
+
+
+def test_describe_remembers_replaced_queue() -> None:
+    jb, _ = make()
+    do(jb, "set", ["a"])
+    do(jb, "set", ["b"])
+    assert jb.describe("a") == ("Art - A", "Alb")
+    do(jb, "add", ["c"])
+    do(jb, "clear")
+    assert jb.describe("c") == ("C", "")
+
+
+def test_describe_memory_drops_oldest_after_500() -> None:
+    async def many(song_id: str) -> Mapping[str, Any] | None:
+        return {"id": song_id, "title": f"T{song_id}"}
+
+    jb = Jukebox(FakePlayer(), many)  # type: ignore[arg-type]
+    ids = [str(n) for n in range(501)]
+    run(jb.handle("set", ids, None, None, None))
+    run(jb.handle("clear", [], None, None, None))
+    assert jb.describe("0") is None
+    assert jb.describe("1") == ("T1", "")
+    assert jb.describe("500") == ("T500", "")
+
+
+def jukebox_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.name == "bridge.jukebox"]
+
+
+def test_http_action_lines_name_the_track(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb) as client:
+            await client.get("/rest/jukeboxControl?action=start")
+            await client.get("/rest/jukeboxControl?action=set&id=a&id=b")
+            await client.get("/rest/jukeboxControl?action=skip&index=1")
+            await client.get("/rest/jukeboxControl?action=add&id=c")
+            await client.get("/rest/jukeboxControl?action=setGain&gain=0.2")
+
+    run(scenario())
+    lines = jukebox_lines(caplog)
+    assert lines[0].endswith("mute=-")
+    assert lines[1].endswith(' first="Art - A"')
+    assert lines[2].endswith(' track="B"')
+    assert lines[3].endswith(' first="C"')
+    assert lines[4].endswith("mute=-")
+
+
+def test_http_start_on_empty_queue_has_no_suffix(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb) as client:
+            await client.get("/rest/jukeboxControl?action=start")
+
+    run(scenario())
+    (line,) = jukebox_lines(caplog)
+    assert line == "jukebox action=start index=- offset=- ids=0 gain=- mute=-"
