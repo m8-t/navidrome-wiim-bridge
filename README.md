@@ -262,7 +262,7 @@ arm64 as `ghcr.io/m8-t/navidrome-wiim-bridge:0.2.0`. There is no `latest` tag.
 
 ```
 python -m pytest -q tests        # bridge
-node --test tests/js/            # phone page logic
+node --test tests/js/*.test.mjs  # phone page logic
 ```
 
 Layout:
