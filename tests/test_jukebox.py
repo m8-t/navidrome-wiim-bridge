@@ -9,6 +9,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from bridge.jukebox import (
     SEEK_ATTEMPTS,
+    SEEK_FRESH_TIMEOUT,
+    SEEK_TOLERANCE,
     SEEK_WAIT_STEP,
     SEEK_WAIT_TIMEOUT,
     Jukebox,
@@ -48,6 +50,8 @@ class FakePlayer:
         self.pre_refreshes: list[tuple[int | None, bool]] = []
         self.last_ok = False
         self.seek_ok: list[bool] = []
+        self.stale: list[float] = []
+        self.stale_at_seek: list[int] = []
 
     def _rec(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -71,6 +75,7 @@ class FakePlayer:
     async def seek(self, seconds: int) -> None:
         self._rec("seek", seconds)
         self.seek_ok.append(self.last_ok)
+        self.stale_at_seek.append(len(self.stale))
         self.seek_count += 1
         if self.seek_count >= self.seeks_to_take:
             if self.lag_checks:
@@ -105,6 +110,8 @@ class FakePlayer:
             self.lag_left -= 1
             if self.lag_left <= 0:
                 self.pos, self.pending = self.pending, None
+        if self.stale:
+            return PlayerStatus(self.idx, self.is_playing, self.stale.pop(0), True, None, None, None)
         idx, playing = self.pre_refreshes.pop(0) if self.pre_refreshes else (self.idx, self.is_playing)
         self.last_ok = playing and idx == self.idx
         return PlayerStatus(idx, playing, self.pos, True, None, self.volume, self.muted)
@@ -271,7 +278,7 @@ def test_device_never_starts_sends_no_seek(caplog: pytest.LogCaptureFixture) -> 
     status = do(jb, "start")["jukeboxStatus"]
     assert "seek" not in names(player)
     assert seek_warnings(caplog) == ["seek to 34s skipped: device did not start track 0 in time"]
-    assert SEEK_WAIT_TIMEOUT - SEEK_WAIT_STEP < fake.slept <= SEEK_WAIT_TIMEOUT + SEEK_WAIT_STEP
+    assert SEEK_FRESH_TIMEOUT - SEEK_WAIT_STEP < fake.slept <= SEEK_FRESH_TIMEOUT + SEEK_WAIT_STEP
     assert status["playing"] is True
 
 
@@ -292,6 +299,79 @@ def test_seek_within_tolerance_is_confirmed() -> None:
     do(jb, "skip", index=0, offset=34)
     do(jb, "start")
     assert names(player).count("seek") == 1
+
+
+def info_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "bridge.jukebox" and r.levelno == logging.INFO
+    ]
+
+
+def playing_fake(idx: int = 0) -> tuple[Jukebox, FakePlayer, FakeTime]:
+    jb, player, fake = make_timed()
+    player.idx, player.is_playing = idx, True
+    return jb, player, fake
+
+
+def test_stale_status_then_fresh_seeks_once(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = playing_fake()
+    player.stale = [34.0] * 3
+    assert run(jb._seek_when_playing(0, 34)) is True
+    assert names(player) == ["seek"]
+    assert player.stale_at_seek == [0]
+    assert info_messages(caplog) == ["resumed at 34s after 1 seek(s)"]
+    assert seek_warnings(caplog) == []
+
+
+def test_stale_then_fresh_with_dropped_first_seek_retries(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = playing_fake()
+    player.stale = [34.0] * 3
+    player.seeks_to_take = 2
+    assert run(jb._seek_when_playing(0, 34)) is True
+    assert names(player) == ["seek", "seek"]
+    assert info_messages(caplog) == ["resumed at 34s after 2 seek(s)"]
+    assert seek_warnings(caplog) == []
+
+
+def test_stale_forever_at_target_sends_no_seek(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, fake = playing_fake()
+    player.stale = [34.0] * 1000
+    assert run(jb._seek_when_playing(0, 34)) is True
+    assert "seek" not in names(player)
+    assert info_messages(caplog) == ["resume at 34s: device already there"]
+    assert seek_warnings(caplog) == []
+    assert fake.slept <= SEEK_FRESH_TIMEOUT + SEEK_WAIT_STEP
+
+
+@pytest.mark.parametrize("seconds", [0, 1, SEEK_TOLERANCE])
+def test_seek_within_tolerance_of_start_is_skipped(seconds: int) -> None:
+    jb, player, fake = playing_fake()
+    assert run(jb._seek_when_playing(0, seconds)) is True
+    assert player.calls == []
+    assert fake.slept == 0
+
+
+def test_seek_just_past_tolerance_takes_normal_path() -> None:
+    jb, player, _ = playing_fake()
+    assert run(jb._seek_when_playing(0, SEEK_TOLERANCE + 1)) is True
+    assert names(player) == ["seek"]
+
+
+def test_wrong_index_with_low_position_does_not_end_wait(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player, _ = playing_fake(idx=1)
+    assert run(jb._seek_when_playing(0, 34)) is False
+    assert "seek" not in names(player)
+    assert seek_warnings(caplog) == ["seek to 34s skipped: device did not start track 0 in time"]
 
 
 def test_start_without_position_sends_no_seek_and_no_wait() -> None:

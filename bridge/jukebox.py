@@ -30,6 +30,7 @@ QUIET_ACTIONS = frozenset({"get", "status"})
 PATHS = ("/rest/jukeboxControl", "/rest/jukeboxControl.view")
 SEEK_WAIT_STEP = 0.25
 SEEK_WAIT_TIMEOUT = 8.0
+SEEK_FRESH_TIMEOUT = 4.0
 SEEK_ATTEMPTS = 4
 SEEK_VERIFY_CHECKS = 4
 SEEK_TOLERANCE = 3
@@ -163,23 +164,37 @@ class Jukebox:
         self.position = int(status.position_s)
 
     async def _seek_when_playing(self, index: int, seconds: int) -> bool:
-        deadline = self._clock() + SEEK_WAIT_TIMEOUT
+        if seconds <= SEEK_TOLERANCE:
+            logger.debug("seek to %ds skipped: within %ds of the start", seconds, SEEK_TOLERANCE)
+            return True
+        started = self._clock()
+        deadline = started + SEEK_WAIT_TIMEOUT
+        fresh_deadline = started + min(SEEK_FRESH_TIMEOUT, SEEK_WAIT_TIMEOUT)
+        target = seconds - SEEK_TOLERANCE
+        saw_at_target = False
         while True:
             status = await self._player.refresh()
-            if status.in_control and status.playing and status.index == index:
+            on_track = status.in_control and status.playing and status.index == index
+            if on_track and status.position_s < target:
                 break
-            if self._clock() >= deadline:
+            if on_track:
+                saw_at_target = True
+            if self._clock() >= fresh_deadline:
+                if saw_at_target and on_track:
+                    logger.info("resume at %ds: device already there", seconds)
+                    return True
                 logger.warning(
                     "seek to %ds skipped: device did not start track %d in time", seconds, index
                 )
                 return False
             await self._sleep(SEEK_WAIT_STEP)
-        for _ in range(SEEK_ATTEMPTS):
+        for attempt in range(1, SEEK_ATTEMPTS + 1):
             await self._player.seek(seconds)
             for _ in range(SEEK_VERIFY_CHECKS):
                 await self._sleep(SEEK_WAIT_STEP)
                 status = await self._player.refresh()
-                if status.position_s >= seconds - SEEK_TOLERANCE:
+                if status.position_s >= target:
+                    logger.info("resumed at %ds after %d seek(s)", seconds, attempt)
                     return True
                 if self._clock() >= deadline:
                     break
