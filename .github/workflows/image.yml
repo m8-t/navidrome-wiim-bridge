@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
+      - if: startsWith(github.ref, 'refs/tags/v')
+        run: python tools/changelog_section.py "$GITHUB_REF_NAME" > /dev/null
       - run: pip install aiohttp==3.14.3 pytest
       - run: python -m pytest -q tests
       - uses: actions/setup-node@v7
@@ -56,3 +58,32 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/m8-t/navidrome-wiim-bridge
             org.opencontainers.image.revision=${{ github.sha }}
+
+  release:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Write release notes
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          {
+            python tools/changelog_section.py "$VERSION"
+            printf '\n## Image\n\n```\nghcr.io/m8-t/navidrome-wiim-bridge:%s\n```\n' "$VERSION"
+          } > notes.md
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md --verify-tag
+          fi
