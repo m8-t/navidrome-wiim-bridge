@@ -8,6 +8,33 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.4.0] - 2026-10-11
+
+### Added
+
+- Lock screen controls for the phone page: play, pause, next, previous and seeking,
+  with title, artist and cover, through the browser's media session. A phone only
+  shows such controls for a page that plays sound itself, so the page plays silence on
+  the phone while this is on. That means other audio on the phone pauses. It is a
+  switch in the page's new settings sheet and is off by default. Tested in a desktop
+  browser only so far; behaviour on a locked phone depends on the phone's browser.
+- A mini player on the Queue and Library tabs of the phone page.
+- The queue shows its number of tracks and total playing time.
+
+### Changed
+
+- The phone page has a new look: cover with a blurred backdrop, icon buttons, a slim
+  seek bar, cover thumbnails in the queue, album covers in a grid in the library, an
+  album header with artist and playing time, and a settings sheet that holds "Sign
+  out". Functions and addresses are unchanged.
+- The log names tracks. The lines for audio the device fetches now read
+  `device fetches "Artist - Title" from "Album"` and
+  `sent "Artist - Title": 28.3 MB, complete`. The jukebox command lines for `skip`,
+  `start`, `set` and `add` carry the track name too. The song id and request details
+  remain in the optional JSON request log.
+- Track names are cleaned before they are logged, so a title cannot break a log line
+  in two.
+
 ## [0.3.0] - 2026-10-11
 
 ### Changed (breaking)
@@ -108,6 +135,7 @@ First version. Published as an image only; there is no git tag for it.
 - Container support: credentials and path secret from environment variables,
   `/healthz`, a Dockerfile.
 
+[0.4.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.4.0
 [0.3.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.3.0
 [0.2.1]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.2.1
 [0.2.0]: https://github.com/m8-t/navidrome-wiim-bridge/releases/tag/v0.2.0

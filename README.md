@@ -208,11 +208,19 @@ The bridge logs to standard output, one line per event with time, level and sour
 |---|---|
 | `error` | crashes only |
 | `warn` | things that went wrong: a failed command to the device, a lost device queue, an audio request with a wrong path secret, a failed pass-through to Navidrome |
-| `info` | also every command a client sends (`skip`, `start`, `set` and so on) and every track the device fetches |
+| `info` | also every command a client sends (`skip`, `start`, `set` and so on) and every track the device fetches, by name |
 | `debug` | also the status polls, which clients send about once a second |
 
 Set it with `--log-level` or `BRIDGE_LOG_LEVEL`. `warn` keeps a healthy bridge silent;
 `info` is the level to switch to when you want to see why something happened.
+
+At `info` a played track looks like this:
+
+```
+INFO bridge.jukebox: jukebox action=start index=- offset=- ids=0 gain=- mute=- track="2Pac - Changes"
+INFO bridge.proxy: device fetches "2Pac - Changes" from "Greatest Hits"
+INFO bridge.proxy: sent "2Pac - Changes": 28.3 MB, complete
+```
 
 Passwords, tokens and the path secret are never logged. Web addresses in error
 messages lose everything after the `?`.
@@ -226,7 +234,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.3.0
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.4.0
 ```
 
 ### Kubernetes
@@ -251,8 +259,13 @@ to itself, which is why a patched build exists:
 
 **From a phone:** open `http://<bridge>:8098/remote/`. It is a small page built for
 portrait screens: a player with cover, seek bar, volume and mute, the queue, and a
-library view with search. Sign in with your Navidrome user. The phone stores a derived
-token, not the password.
+library view with search and album covers. Sign in with your Navidrome user. The phone
+stores a derived token, not the password.
+
+The page can also put its controls on the phone's lock screen. Phones only show such
+controls for a page that plays sound itself, so with this switched on the page plays
+silence on the phone and passes your taps on to the bridge. Other audio on the phone
+pauses while it is on. The switch is in the page's settings and is off by default.
 
 **From the remote:** nothing to set up.
 
