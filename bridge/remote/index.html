@@ -75,6 +75,7 @@
         <input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off">
         <button id="search-clear" type="button" class="round r44 plain" aria-label="Clear search" title="Clear search" hidden><span class="ic" data-icon="close"></span></button>
       </div>
+      <button id="mix-open" type="button" class="btn raised mix-btn" aria-label="Random mix" title="Random mix"><span class="ic" data-icon="shuffle"></span><span class="lbl">Random mix</span></button>
     </div>
     <div id="library-list" class="scroll"></div>
     <div id="album-view" class="album-view scroll" hidden>
@@ -131,6 +132,33 @@
   </div>
 </div>
 
+<div id="mix-sheet" class="sheet-root" hidden>
+  <div id="mix-dim" class="sheet-dim"></div>
+  <div id="mix-panel" class="sheet mix" role="dialog" aria-modal="true" aria-labelledby="mix-title" tabindex="-1">
+    <div class="sheet-head">
+      <h2 id="mix-title">Random mix</h2>
+      <button id="mix-close" type="button" class="round r44 plain" aria-label="Close" title="Close"><span class="ic" data-icon="close"></span></button>
+    </div>
+    <div class="group" role="group" aria-labelledby="mix-count-label">
+      <span id="mix-count-label" class="group-label">Songs</span>
+      <div id="mix-count" class="seg">
+        <button type="button" data-count="100" aria-pressed="false">100</button>
+        <button type="button" data-count="250" aria-pressed="false">250</button>
+        <button type="button" data-count="500" aria-pressed="true">500</button>
+      </div>
+    </div>
+    <div class="years">
+      <label class="field"><span>Year from</span><input id="mix-from" type="number" inputmode="numeric" min="1850" max="2100" placeholder="Any"></label>
+      <label class="field"><span>Year to</span><input id="mix-to" type="number" inputmode="numeric" min="1850" max="2100" placeholder="Any"></label>
+    </div>
+    <div class="group" role="group" aria-labelledby="mix-genre-label">
+      <span class="group-label"><span id="mix-genre-label">Genres</span> <span id="mix-genre-hint" class="sub">Any genre</span></span>
+      <div id="mix-genres" class="chips"></div>
+    </div>
+    <button id="mix-play" type="button" class="btn accent block"><span class="ic" data-icon="play"></span>Play mix</button>
+  </div>
+</div>
+
 <template id="tpl-queue-row">
   <li class="row">
     <button type="button" class="main">
@@ -182,6 +210,7 @@
 <template id="icon-plus"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg></template>
 <template id="icon-back"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M14.6 4.6L16 6l-6 6 6 6-1.4 1.4L7.2 12z"/></svg></template>
 <template id="icon-settings"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 1 0 0-13zm0 3.5a3 3 0 1 1 0 6 3 3 0 1 1 0-6z"/><rect x="10.5" y="2" width="3" height="4"/><rect x="10.5" y="18" width="3" height="4"/><rect x="2" y="10.5" width="4" height="3"/><rect x="18" y="10.5" width="4" height="3"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(45 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(135 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(225 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(315 12 12)"/></svg></template>
+<template id="icon-shuffle"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M10.6 9.2L5.4 4 4 5.4l5.2 5.2zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4zm.3 9.4l-1.4 1.4 3.1 3.1-2 2H20v-5.5l-2 2z"/></svg></template>
 <template id="icon-music"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 4v10.3a3.5 3.5 0 1 0 2 3.2V8h6V4z"/></svg></template>
 
 <script type="module" src="remote.js"></script>

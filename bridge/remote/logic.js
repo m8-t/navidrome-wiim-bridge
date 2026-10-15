@@ -98,6 +98,17 @@ export function playCalls(ids, startIndex) {
   ];
 }
 
+export function mixCalls(ids) {
+  if (ids.length === 0) return [];
+  const [first, ...rest] = chunk(ids);
+  return [
+    { action: "set", ids: first },
+    { action: "skip", index: 0, offset: 0 },
+    { action: "start" },
+    ...rest.map((part) => ({ action: "add", ids: part })),
+  ];
+}
+
 export function addCalls(ids) {
   return chunk(ids).map((part) => ({ action: "add", ids: part }));
 }
@@ -196,4 +207,42 @@ export function positionState(position, duration) {
   const p = Number(position);
   const safe = Number.isFinite(p) ? Math.max(0, p) : 0;
   return { duration: d, position: Math.min(safe, d), playbackRate: 1 };
+}
+
+const RANDOM_MAX = 500;
+const YEAR_MIN = 1850;
+const YEAR_MAX = 2100;
+
+function parseYear(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{4}$/.test(text)) return null;
+  const year = Number(text);
+  return year >= YEAR_MIN && year <= YEAR_MAX ? year : null;
+}
+
+export function randomSongParams({ count, fromYear, toYear, genre } = {}) {
+  const n = Math.floor(Number(count));
+  const params = { size: Number.isFinite(n) && n >= 1 ? Math.min(n, RANDOM_MAX) : RANDOM_MAX };
+  let from = parseYear(fromYear);
+  let to = parseYear(toYear);
+  if (from !== null && to !== null && from > to) [from, to] = [to, from];
+  if (from !== null) params.fromYear = from;
+  if (to !== null) params.toYear = to;
+  if (typeof genre === "string" && genre.trim() !== "") params.genre = genre.trim();
+  return params;
+}
+
+export function mergeRandom(lists, count, rng = Math.random) {
+  const seen = new Set();
+  const songs = [];
+  for (const song of lists.flat()) {
+    if (seen.has(song.id)) continue;
+    seen.add(song.id);
+    songs.push(song);
+  }
+  for (let i = songs.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [songs[i], songs[j]] = [songs[j], songs[i]];
+  }
+  return songs.slice(0, Math.max(0, count));
 }

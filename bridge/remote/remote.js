@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState,
@@ -7,6 +7,9 @@ import {
 
 const STORAGE_KEY = "wiimRemoteAuth";
 const LOCK_KEY = "wiimRemoteLockControls";
+const MIX_KEY = "wiimRemoteRandomMix";
+const MIX_COUNTS = [100, 250, 500];
+const MIX_HEAD_CALLS = 3;
 const POLL_MS = 1500;
 const HIDDEN_POLL_MS = 3000;
 const TICK_MS = 500;
@@ -65,6 +68,9 @@ let gainTouchedAt = -Infinity;
 let gainTimer = null;
 let statusTimer = null;
 let queueKey = null;
+let queueIndex = -1;
+let mixGenres = null;
+let mixBusy = false;
 let searchTimer = null;
 let searchToken = 0;
 let albumSongs = [];
@@ -90,6 +96,11 @@ function showStatus(message, info = false) {
   statusTimer = setTimeout(() => { node.hidden = true; }, STATUS_MS);
 }
 
+function hideStatus() {
+  clearTimeout(statusTimer);
+  $("status").hidden = true;
+}
+
 function showLogin(message = "") {
   $("login-error").textContent = message;
   $("login").hidden = false;
@@ -110,6 +121,7 @@ function signOut(message = "") {
   auth = null;
   entries = [];
   queueKey = null;
+  mixGenres = null;
   generation += 1;
   showLogin(message);
 }
@@ -280,9 +292,13 @@ function renderTime() {
 }
 
 function renderQueue(force = false) {
-  const key = `${status.currentIndex}|${entries.map((e) => e.id).join(",")}`;
-  if (!force && key === queueKey) return;
-  queueKey = key;
+  const ids = entries.map((e) => e.id).join(",");
+  if (!force && ids === queueKey) {
+    if (status.currentIndex !== queueIndex) markCurrentRow();
+    return;
+  }
+  queueKey = ids;
+  queueIndex = status.currentIndex;
   const list = $("queue");
   list.replaceChildren();
   entries.forEach((song, i) => {
@@ -299,11 +315,17 @@ function renderQueue(force = false) {
       if (!status.playing) calls.push({ action: "start" });
       runCommands(calls);
     });
-    const remove = row.querySelector(".remove");
-    if (i === status.currentIndex) remove.remove();
-    else remove.addEventListener("click", () => runCommands([{ action: "remove", index: i }]));
+    row.querySelector(".remove").addEventListener("click", () => runCommands([{ action: "remove", index: i }]));
     list.append(fragment);
   });
+  if (currentTab === "queue") scrollCurrentIntoView();
+}
+
+function markCurrentRow() {
+  const rows = $("queue").children;
+  if (rows[queueIndex]) rows[queueIndex].classList.remove("current");
+  queueIndex = status.currentIndex;
+  if (rows[queueIndex]) rows[queueIndex].classList.add("current");
   if (currentTab === "queue") scrollCurrentIntoView();
 }
 
@@ -982,8 +1004,15 @@ function applyMedia() {
   }
 }
 
-function openSheet() {
+const activeSheet = () => document.querySelector(".sheet-root:not([hidden])");
+
+function showSheet(root) {
   sheetReturnFocus = document.activeElement;
+  root.hidden = false;
+  root.querySelector(".sheet").focus();
+}
+
+function openSettings() {
   $("sheet-user").textContent = auth ? `Signed in as ${auth.u}` : "";
   const supported = mediaSupported();
   const sw = $("lock-switch");
@@ -992,19 +1021,153 @@ function openSheet() {
   $("lock-help").textContent = supported
     ? "Plays silence on this phone so the lock screen shows the controls. Other audio on the phone will pause."
     : "Not supported by this browser.";
-  $("sheet").hidden = false;
-  $("sheet-panel").focus();
+  showSheet($("sheet"));
 }
 
 function closeSheet(restoreFocus = true) {
-  if ($("sheet").hidden) return;
-  $("sheet").hidden = true;
+  const root = activeSheet();
+  if (!root) return;
+  root.hidden = true;
   if (restoreFocus && sheetReturnFocus && sheetReturnFocus.focus) sheetReturnFocus.focus();
   sheetReturnFocus = null;
 }
 
+function loadMixChoice() {
+  const fallback = { count: 500, fromYear: "", toYear: "", genres: [] };
+  try {
+    const data = JSON.parse(localStorage.getItem(MIX_KEY));
+    if (!data || typeof data !== "object") return fallback;
+    return {
+      count: MIX_COUNTS.includes(data.count) ? data.count : 500,
+      fromYear: String(data.fromYear ?? ""),
+      toYear: String(data.toYear ?? ""),
+      genres: Array.isArray(data.genres) ? data.genres.filter((g) => typeof g === "string") : [],
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveMixChoice(choice) {
+  try {
+    localStorage.setItem(MIX_KEY, JSON.stringify(choice));
+  } catch {
+    // storage unavailable, the page works without it
+  }
+}
+
+function readMixChoice() {
+  const pressed = document.querySelector("#mix-count [aria-pressed='true']");
+  return {
+    count: pressed ? Number(pressed.dataset.count) : 500,
+    fromYear: $("mix-from").value.trim(),
+    toYear: $("mix-to").value.trim(),
+    genres: [...document.querySelectorAll("#mix-genres [aria-pressed='true']")].map((b) => b.dataset.genre),
+  };
+}
+
+function updateGenreHint() {
+  const picked = readMixChoice().genres;
+  $("mix-genre-hint").textContent = picked.length ? `${picked.length} selected` : "Any genre";
+}
+
+function renderGenres(genres, picked) {
+  const box = $("mix-genres");
+  box.replaceChildren();
+  for (const genre of genres) {
+    const chip = el("button", "chip", genre.value);
+    chip.type = "button";
+    chip.dataset.genre = genre.value;
+    chip.setAttribute("aria-pressed", String(picked.includes(genre.value)));
+    box.append(chip);
+  }
+  updateGenreHint();
+}
+
+async function loadGenres(picked) {
+  if (mixGenres) {
+    renderGenres(mixGenres, picked);
+    return;
+  }
+  try {
+    const body = await api("getGenres");
+    const list = (body.genres && body.genres.genre) || [];
+    mixGenres = [...list]
+      .filter((g) => g && g.value)
+      .sort((a, b) => (b.songCount || 0) - (a.songCount || 0));
+    renderGenres(mixGenres, picked);
+  } catch (err) {
+    handleError(err);
+  }
+}
+
+function openMix() {
+  const choice = loadMixChoice();
+  for (const button of document.querySelectorAll("#mix-count button")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.count) === choice.count));
+  }
+  $("mix-from").value = choice.fromYear;
+  $("mix-to").value = choice.toYear;
+  showSheet($("mix-sheet"));
+  loadGenres(choice.genres);
+}
+
+async function fetchRandom(params) {
+  const body = await api("getRandomSongs", params);
+  return (body.randomSongs && body.randomSongs.song) || [];
+}
+
+async function playMix() {
+  if (mixBusy) return;
+  gesture();
+  const choice = readMixChoice();
+  saveMixChoice(choice);
+  mixBusy = true;
+  $("mix-play").disabled = true;
+  showStatus("Loading mix\u2026", true);
+  try {
+    const base = { count: choice.count, fromYear: choice.fromYear, toYear: choice.toYear };
+    const genres = choice.genres.length ? choice.genres : [undefined];
+    const lists = await Promise.all(genres.map((genre) => fetchRandom(randomSongParams({ ...base, genre }))));
+    const songs = mergeRandom(lists, choice.count);
+    if (!songs.length) {
+      showStatus("No songs match these filters");
+      return;
+    }
+    const calls = mixCalls(songs.map((song) => song.id));
+    if (!(await runCommands(calls.slice(0, MIX_HEAD_CALLS)))) return;
+    hideStatus();
+    closeSheet();
+    setTab("player");
+    if (calls.length > MIX_HEAD_CALLS) runCommands(calls.slice(MIX_HEAD_CALLS));
+  } catch (err) {
+    handleError(err);
+  } finally {
+    mixBusy = false;
+    $("mix-play").disabled = false;
+  }
+}
+
+function bindMix() {
+  $("mix-open").addEventListener("click", openMix);
+  $("mix-close").addEventListener("click", () => closeSheet());
+  $("mix-dim").addEventListener("click", () => closeSheet());
+  $("mix-play").addEventListener("click", playMix);
+  $("mix-count").addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    for (const other of $("mix-count").children) other.setAttribute("aria-pressed", String(other === button));
+  });
+  $("mix-genres").addEventListener("click", (event) => {
+    const chip = event.target.closest(".chip");
+    if (!chip) return;
+    chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+    updateGenreHint();
+  });
+}
+
 function bindSheet() {
-  $("open-settings").addEventListener("click", openSheet);
+  $("open-settings").addEventListener("click", openSettings);
   $("sheet-close").addEventListener("click", () => closeSheet());
   $("sheet-dim").addEventListener("click", () => closeSheet());
   $("signout").addEventListener("click", () => signOut());
@@ -1018,18 +1181,20 @@ function bindSheet() {
     }
   });
   document.addEventListener("keydown", (event) => {
-    if ($("sheet").hidden) return;
+    const root = activeSheet();
+    if (!root) return;
     if (event.key === "Escape") {
       closeSheet();
       return;
     }
     if (event.key !== "Tab") return;
-    const items = [...$("sheet-panel").querySelectorAll("button, input:not([disabled])")];
+    const panel = root.querySelector(".sheet");
+    const items = [...panel.querySelectorAll("button:not([disabled]), input:not([disabled])")];
     if (!items.length) return;
     const first = items[0];
     const last = items[items.length - 1];
     const active = document.activeElement;
-    if (event.shiftKey && (active === first || active === $("sheet-panel"))) {
+    if (event.shiftKey && (active === first || active === panel)) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && active === last) {
@@ -1096,6 +1261,7 @@ function init() {
   bindQueue();
   bindLibrary();
   bindSheet();
+  bindMix();
   startLoops();
   auth = loadStoredAuth();
   if (auth) enterApp();

@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -282,4 +282,73 @@ test("nextPage", () => {
   assert.deepEqual(nextPage({ offset: 120 }, 10, 40), { offset: 130, done: true });
   assert.deepEqual(nextPage({ offset: 0 }, 0, 40), { offset: 0, done: true });
   assert.deepEqual(nextPage({ offset: 40 }, NaN, 40), { offset: 40, done: true });
+});
+
+test("mixCalls", () => {
+  assert.deepEqual(mixCalls([]), []);
+  assert.deepEqual(mixCalls(ids(1)), [
+    { action: "set", ids: ["id0"] },
+    { action: "skip", index: 0, offset: 0 },
+    { action: "start" },
+  ]);
+  const fifty = mixCalls(ids(50));
+  assert.equal(fifty.length, 3);
+  assert.equal(fifty[0].ids.length, 50);
+  const calls = mixCalls(ids(51));
+  assert.deepEqual(calls.map((c) => c.action), ["set", "skip", "start", "add"]);
+  assert.deepEqual(calls[3].ids, ["id50"]);
+  const big = mixCalls(ids(500));
+  assert.deepEqual(big.map((c) => c.action), ["set", "skip", "start", ...Array(9).fill("add")]);
+  assert.ok(big.filter((c) => c.ids).every((c) => c.ids.length === 50));
+  assert.deepEqual(big.flatMap((c) => c.ids || []), ids(500));
+});
+
+test("randomSongParams", () => {
+  assert.deepEqual(randomSongParams({ count: 100 }), { size: 100 });
+  assert.deepEqual(randomSongParams({ count: 900 }), { size: 500 });
+  assert.deepEqual(randomSongParams({}), { size: 500 });
+  assert.deepEqual(randomSongParams({ count: "250", fromYear: "1990", toYear: 1999, genre: "Rock" }), {
+    size: 250, fromYear: 1990, toYear: 1999, genre: "Rock",
+  });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: 2005, toYear: 1995 }), { size: 10, fromYear: 1995, toYear: 2005 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: "", toYear: "" }), { size: 10 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: "1990" }), { size: 10, fromYear: 1990 });
+  assert.deepEqual(randomSongParams({ count: 10, toYear: "2001" }), { size: 10, toYear: 2001 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: "99", toYear: "20000" }), { size: 10 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: "1849", toYear: "2101" }), { size: 10 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: "abcd", toYear: "19 9" }), { size: 10 });
+  assert.deepEqual(randomSongParams({ count: 10, fromYear: 1850, toYear: 2100 }), { size: 10, fromYear: 1850, toYear: 2100 });
+  assert.deepEqual(randomSongParams({ count: 10, genre: "  " }), { size: 10 });
+  assert.deepEqual(randomSongParams({ count: NaN }), { size: 500 });
+});
+
+function seeded(seed) {
+  let x = seed;
+  return () => {
+    x = (x * 1664525 + 1013904223) % 4294967296;
+    return x / 4294967296;
+  };
+}
+
+test("mergeRandom dedupes, shuffles deterministically and cuts", () => {
+  const a = [{ id: "1", n: "a1" }, { id: "2" }, { id: "3" }];
+  const b = [{ id: "2", n: "b2" }, { id: "4" }, { id: "1", n: "b1" }];
+  const merged = mergeRandom([a, b], 10, seeded(7));
+  assert.deepEqual(merged.map((s) => s.id).sort(), ["1", "2", "3", "4"]);
+  assert.equal(merged.find((s) => s.id === "1").n, "a1");
+  assert.deepEqual(merged, mergeRandom([a, b], 10, seeded(7)));
+  assert.notDeepEqual(merged.map((s) => s.id), mergeRandom([a, b], 10, seeded(8)).map((s) => s.id));
+  assert.equal(mergeRandom([a, b], 2, seeded(7)).length, 2);
+  assert.deepEqual(mergeRandom([a, b], 2, seeded(7)), merged.slice(0, 2));
+  assert.deepEqual(mergeRandom([], 5), []);
+  assert.deepEqual(mergeRandom([a], 0), []);
+});
+
+test("mergeRandom does not touch its input and uses every item", () => {
+  const list = Array.from({ length: 200 }, (_, i) => ({ id: `s${i}` }));
+  const copy = list.map((s) => s.id);
+  const merged = mergeRandom([list], 200, seeded(3));
+  assert.deepEqual(list.map((s) => s.id), copy);
+  assert.equal(new Set(merged.map((s) => s.id)).size, 200);
+  assert.notDeepEqual(merged.map((s) => s.id), copy);
 });

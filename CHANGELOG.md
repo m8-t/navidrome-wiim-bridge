@@ -12,6 +12,13 @@ Each release is published as a container image:
 
 ### Added
 
+- Phone page: a "Random mix" button next to the library search opens a sheet like
+  Feishin's "shuffle all". Pick 100, 250 or 500 songs, optionally a first and last
+  year, and any number of genres (loaded from the server, biggest first). The page asks
+  Navidrome for random songs once per genre, merges and shuffles them without
+  duplicates and starts playing after the first 50 songs, while the rest is added in
+  the background. The last choices are remembered on the device. If nothing matches,
+  the sheet stays open with a message.
 - Phone page: the library is endless. "Recently added" loads 40 albums at a time and
   fetches the next 40 as you scroll towards the end, until the whole library is listed.
   The scroll position is kept when you open an album and go back. On wide screens the
@@ -26,6 +33,8 @@ Each release is published as a container image:
 
 ### Changed
 
+- Phone page: the queue list no longer rebuilds every row when only the current track
+  changes, which keeps a 500-song queue responsive.
 - Player page: the single cover with its carousel swipe is replaced by a coverflow over
   the whole queue. The current track sits in the middle at full size, up to three
   tracks on each side are tilted and overlap behind it, one tile per queue entry even
