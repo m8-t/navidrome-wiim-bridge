@@ -52,6 +52,7 @@ class FakePlayer:
         self.seek_ok: list[bool] = []
         self.stale: list[float] = []
         self.stale_at_seek: list[int] = []
+        self.sampled_at = 0.0
 
     def _rec(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -111,10 +112,10 @@ class FakePlayer:
             if self.lag_left <= 0:
                 self.pos, self.pending = self.pending, None
         if self.stale:
-            return PlayerStatus(self.idx, self.is_playing, self.stale.pop(0), True, None, None, None)
+            return PlayerStatus(self.idx, self.is_playing, self.stale.pop(0), True, None, None, None, self.sampled_at)
         idx, playing = self.pre_refreshes.pop(0) if self.pre_refreshes else (self.idx, self.is_playing)
         self.last_ok = playing and idx == self.idx
-        return PlayerStatus(idx, playing, self.pos, True, None, self.volume, self.muted)
+        return PlayerStatus(idx, playing, self.pos, True, None, self.volume, self.muted, self.sampled_at)
 
 
 async def lookup(song_id: str) -> Mapping[str, Any] | None:
@@ -167,7 +168,7 @@ def test_set_returns_status_and_touches_no_device() -> None:
     jb, player = make()
     payload = do(jb, "set", ["a", "b"])
     assert payload == {
-        "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0, "muted": False}
+        "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0, "positionMs": 0, "muted": False}
     }
     assert player.calls == []
 
@@ -776,3 +777,57 @@ def test_http_start_on_empty_queue_has_no_suffix(caplog: pytest.LogCaptureFixtur
     run(scenario())
     (line,) = jukebox_lines(caplog)
     assert line == "jukebox action=start index=- offset=- ids=0 gain=- mute=-"
+
+
+def make_walled() -> tuple[Jukebox, FakePlayer, list[float]]:
+    player = FakePlayer()
+    wall = [1000.0]
+    jb = Jukebox(player, lookup, wall=lambda: wall[0])  # type: ignore[arg-type]
+    return jb, player, wall
+
+
+def test_position_ms_adds_time_since_device_sample_while_playing() -> None:
+    jb, player, wall = make_walled()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.pos, player.sampled_at = 12.345, 1000.0
+    wall[0] = 1000.4
+    status = do(jb, "get")["jukeboxPlaylist"]
+    assert status["position"] == 12
+    assert status["positionMs"] == 12745
+
+
+def test_position_ms_frozen_while_paused() -> None:
+    jb, player, wall = make_walled()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.pos, player.sampled_at = 7.5, 1000.0
+    wall[0] = 1005.0
+    status = do(jb, "get")["jukeboxPlaylist"]
+    assert status["playing"] is False
+    assert status["positionMs"] == 7500
+
+
+def test_position_ms_skip_and_clear_use_whole_seconds() -> None:
+    jb, player, wall = make_walled()
+    do(jb, "set", ["a", "b"])
+    wall[0] = 2000.0
+    status = do(jb, "skip", index=1, offset=34)["jukeboxStatus"]
+    assert (status["position"], status["positionMs"]) == (34, 34000)
+    do(jb, "clear")
+    assert do(jb, "get")["jukeboxPlaylist"]["positionMs"] == 0
+
+
+def test_position_ms_resume_does_not_count_paused_time() -> None:
+    jb, player, wall = make_walled()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.pos, player.sampled_at = 10.0, 1000.0
+    wall[0] = 1060.0
+    status = do(jb, "start")["jukeboxStatus"]
+    assert status["positionMs"] == 10000
+    wall[0] = 1060.5
+    player.sampled_at = 1060.2
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 10300

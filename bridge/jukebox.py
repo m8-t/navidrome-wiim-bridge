@@ -77,11 +77,13 @@ class Jukebox:
         *,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         self._player = player
         self._lookup = lookup
         self._sleep = sleep
         self._clock = clock
+        self._wall = wall
         self.songs: list[Mapping[str, Any]] = []
         self._seen: dict[str, Mapping[str, Any]] = {}
         self.current = 0
@@ -90,6 +92,8 @@ class Jukebox:
         self.loaded = False
         self.playing = False
         self.position = 0
+        self._position_ms = 0
+        self._position_at = 0.0
         self._actions: dict[str, Callable[..., Awaitable[None]]] = {
             "get": self._noop,
             "status": self._noop,
@@ -150,12 +154,23 @@ class Jukebox:
             return song_label(self.songs[self.current])
         return None
 
+    def _set_position(self, seconds: int) -> None:
+        self.position = seconds
+        self._position_ms = seconds * 1000
+        self._position_at = self._wall()
+
+    def _position_now_ms(self) -> int:
+        if not self.playing:
+            return self._position_ms
+        return self._position_ms + round(max(self._wall() - self._position_at, 0.0) * 1000)
+
     def _status(self) -> dict[str, Any]:
         return {
             "currentIndex": self.current,
             "playing": self.playing,
             "gain": self.gain,
             "position": self.position,
+            "positionMs": self._position_now_ms(),
             "muted": self.muted,
         }
 
@@ -179,12 +194,14 @@ class Jukebox:
             logger.warning("lost control of the device queue")
             self.loaded = False
             self.playing = False
-            self.position = 0
+            self._set_position(0)
             return
         if status.index is not None:
             self.current = status.index
         self.playing = status.playing
         self.position = int(status.position_s)
+        self._position_ms = round(status.position_s * 1000)
+        self._position_at = status.sampled_at
 
     async def _seek_when_playing(self, index: int, seconds: int) -> bool:
         if seconds <= SEEK_TOLERANCE:
@@ -257,7 +274,7 @@ class Jukebox:
         self.current = 0
         self.loaded = False
         self.playing = False
-        self.position = 0
+        self._set_position(0)
 
     async def _add(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         songs = await self._lookup_all(ids)
@@ -276,6 +293,7 @@ class Jukebox:
             self.loaded = True
             if self.position > 0:
                 await self._seek_when_playing(self.current, self.position)
+        self._position_at = self._wall()
         self.playing = True
 
     async def _stop(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
@@ -298,7 +316,7 @@ class Jukebox:
             else:
                 await self._player.seek(seconds)
         self.current = target
-        self.position = seconds
+        self._set_position(seconds)
 
     async def _remove(self, ids: Sequence[str], index: int | None, offset: Any, gain: Any) -> None:
         target = self._require_index(index)
@@ -306,7 +324,7 @@ class Jukebox:
             await self._player.clear()
             self.loaded = False
             self.playing = False
-            self.position = 0
+            self._set_position(0)
         elif self.loaded:
             await self._player.remove(target)
         del self.songs[target]
@@ -321,7 +339,7 @@ class Jukebox:
         self.current = 0
         self.loaded = False
         self.playing = False
-        self.position = 0
+        self._set_position(0)
 
     async def _shuffle(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         raise JukeboxError(0, "shuffle is not supported")

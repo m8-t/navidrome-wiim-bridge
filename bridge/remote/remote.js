@@ -1,6 +1,6 @@
 import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, playCalls, addCalls,
-  estimatePosition, gainToPercent, percentToGain, unwrap,
+  estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, needsRefresh,
 } from "./logic.js";
@@ -12,7 +12,8 @@ const MIX_COUNTS = [100, 250, 500];
 const MIX_HEAD_CALLS = 3;
 const POLL_MS = 1500;
 const HIDDEN_POLL_MS = 3000;
-const TICK_MS = 500;
+const IDLE_TICK_MS = 1000;
+const TICK_LEAD_MS = 20;
 const GAIN_HOLD_MS = 1500;
 const STATUS_MS = 4000;
 const FLOW_DRAG_PX = 8;
@@ -57,6 +58,9 @@ let auth = null;
 let status = { currentIndex: 0, playing: false, gain: 0, position: 0, muted: false };
 let entries = [];
 let polledAt = Date.now();
+let anchorGeneration = 0;
+let forceAnchor = false;
+let tickTimer = null;
 let generation = 0;
 let pendingCommands = 0;
 let coverBusy = false;
@@ -169,12 +173,30 @@ function coverUrl(coverArt, size) {
   return `/rest/getCoverArt?${query}`;
 }
 
+function reportedPosition(next) {
+  const ms = Number(next.positionMs);
+  if (next.positionMs != null && Number.isFinite(ms)) return ms / 1000;
+  return Number(next.position) || 0;
+}
+
 function applyStatus(next, list) {
+  const currentIndex = next.currentIndex ?? 0;
+  const playing = Boolean(next.playing);
+  const position = reconcilePosition({
+    shown: estimated(),
+    reported: reportedPosition(next),
+    playing,
+    wasPlaying: status.playing,
+    sameTrack: currentIndex === status.currentIndex,
+    forced: forceAnchor || generation !== anchorGeneration,
+  });
+  forceAnchor = false;
+  anchorGeneration = generation;
   status = {
-    currentIndex: next.currentIndex ?? 0,
-    playing: Boolean(next.playing),
+    currentIndex,
+    playing,
     gain: Number(next.gain) || 0,
-    position: Number(next.position) || 0,
+    position,
     muted: Boolean(next.muted),
   };
   polledAt = Date.now();
@@ -281,6 +303,23 @@ function estimated() {
 }
 
 function renderTime() {
+  paintTime();
+  scheduleTick();
+}
+
+function scheduleTick() {
+  clearTimeout(tickTimer);
+  tickTimer = null;
+  if (!auth || !visible()) return;
+  let delay = IDLE_TICK_MS;
+  if (status.playing) {
+    const position = estimated();
+    delay = (Math.floor(position) + 1 - position) * 1000 + TICK_LEAD_MS;
+  }
+  tickTimer = setTimeout(renderTime, delay);
+}
+
+function paintTime() {
   if (dragging) return;
   const position = estimated();
   $("seek").value = String(Math.floor(position));
@@ -401,8 +440,8 @@ function startLoops() {
     if (!auth) return;
     if (visible() || (lockActive && Date.now() - lastPollAt >= HIDDEN_POLL_MS - 100)) poll();
   }, POLL_MS);
-  setInterval(() => { if (auth && visible()) renderTime(); }, TICK_MS);
   document.addEventListener("visibilitychange", () => {
+    renderTime();
     if (auth && visible()) poll();
   });
 }
@@ -557,6 +596,7 @@ function goToIndex(index, { start = false } = {}) {
   if (index !== status.currentIndex) {
     status = { ...status, currentIndex: index, position: 0 };
     polledAt = Date.now();
+    forceAnchor = true;
     const calls = [{ action: "skip", index, offset: 0 }];
     if (start && !status.playing) calls.push({ action: "start" });
     runCommands(calls).then((ok) => {

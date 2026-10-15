@@ -32,6 +32,7 @@ class PlayerStatus:
     transport: str | None
     volume: int | None = None
     muted: bool | None = None
+    sampled_at: float = 0.0
 
 
 class Player:
@@ -209,4 +210,5 @@ class Player:
             transport=s.transport,
             volume=s.volume,
             muted=s.muted,
+            sampled_at=s.t,
         )

@@ -120,6 +120,18 @@ export function estimatePosition(position, playing, polledAtMs, nowMs, duration)
   return Math.max(value, 0);
 }
 
+// The server sample is only trusted to about a second (network and queueing delay),
+// so smaller disagreements are noise; the local clock is the better 1x predictor.
+export const SNAP_THRESHOLD_S = 1.5;
+
+export function reconcilePosition({
+  shown, reported, playing, wasPlaying, sameTrack, forced, threshold = SNAP_THRESHOLD_S,
+}) {
+  if (forced || !playing || !wasPlaying || !sameTrack) return reported;
+  if (!Number.isFinite(shown) || Math.abs(reported - shown) > threshold) return reported;
+  return shown;
+}
+
 export function gainToPercent(gain) {
   return Math.min(100, Math.max(0, Math.round(gain * 100)));
 }

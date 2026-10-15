@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, needsRefresh,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, needsRefresh, reconcilePosition,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -358,4 +358,40 @@ test("needsRefresh is true only for queue-changing calls", () => {
   assert.equal(needsRefresh([{ action: "add", id: ["a"] }]), true);
   assert.equal(needsRefresh([{ action: "skip", index: 0, offset: 0 }, { action: "start" }]), false);
   assert.equal(needsRefresh([]), false);
+});
+
+const rec = (over) => reconcilePosition({
+  shown: 10.4, reported: 10.1, playing: true, wasPlaying: true, sameTrack: true, forced: false,
+  threshold: 1.5, ...over,
+});
+
+test("reconcilePosition keeps the local estimate when the report is within the threshold", () => {
+  assert.equal(rec({}), 10.4);
+  assert.equal(rec({ reported: 11.5 }), 10.4);
+  assert.equal(rec({ reported: 8.95 }), 10.4);
+});
+
+test("reconcilePosition snaps beyond the threshold", () => {
+  assert.equal(rec({ reported: 12.0 }), 12.0);
+  assert.equal(rec({ reported: 5 }), 5);
+});
+
+test("reconcilePosition snaps on track change, play flip, forced and paused", () => {
+  assert.equal(rec({ sameTrack: false }), 10.1);
+  assert.equal(rec({ wasPlaying: false }), 10.1);
+  assert.equal(rec({ playing: false }), 10.1);
+  assert.equal(rec({ forced: true }), 10.1);
+});
+
+test("reconcilePosition never goes backwards over repeated noisy polls", () => {
+  let shown = 3;
+  for (const noise of [0.9, 0.1, 0.7, 0.0, 1.0, 0.4]) {
+    const next = rec({ shown: shown + 1.5, reported: shown + 1.5 - noise });
+    assert.ok(next >= shown);
+    shown = next;
+  }
+});
+
+test("reconcilePosition falls back to the report for a non-finite estimate", () => {
+  assert.equal(rec({ shown: NaN }), 10.1);
 });

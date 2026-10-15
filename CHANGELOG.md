@@ -8,6 +8,21 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.6.3] - 2026-10-15
+
+### Fixed
+
+- The elapsed time on the remote page no longer hangs for a moment and then jumps ahead
+  (or briefly steps back). The page keeps its own clock between polls, snaps only on a
+  track change, play/pause, a command or a drift above 1.5 s, and redraws on whole
+  seconds.
+
+### Added
+
+- `jukeboxControl` responses carry an extra `positionMs` field: the position in
+  milliseconds, advanced to the moment the response is built. `position` stays whole
+  seconds as the Subsonic API defines it.
+
 ## [0.6.2] - 2026-10-15
 
 ### Fixed
