@@ -250,7 +250,9 @@ class Jukebox:
             else:
                 entry = (self._queue_id, self._keys[self.current])
                 song = self.songs[self.current]
-                events = self._plays.feed(entry, song, self.playing, position_s, self._wall())
+                events = self._plays.feed(
+                    entry, song, self.playing, position_s, self._wall(), self.repeat == "one"
+                )
             self._scrobbler.submit(events)
         except Exception as exc:  # noqa: BLE001
             logger.warning("play tracking failed: %s", type(exc).__name__)

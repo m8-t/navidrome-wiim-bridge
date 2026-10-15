@@ -1619,6 +1619,7 @@ def test_the_same_song_twice_in_the_queue_is_two_plays() -> None:
 def test_repeat_one_loop_counts_as_another_play() -> None:
     jb, player, sink, wall = make_scrobbling()
     do(jb, "set", ["a"])
+    do(jb, "setRepeat", repeat="one")
     do(jb, "start")
     sample(jb, player, wall, 1000.0, 0.0)
     play_for(jb, player, wall, 95)
@@ -1628,6 +1629,43 @@ def test_repeat_one_loop_counts_as_another_play() -> None:
         Scrobble("a", 1_000_000, True),
         Scrobble("a", 1_099_000, False),
     ]
+
+
+def test_without_repeat_one_the_wrap_before_a_track_change_is_not_a_play() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    play_for(jb, player, wall, 95)
+    sink.take()
+    sample(jb, player, wall, 1097.0, 0.0)
+    assert sink.take() == []
+    sample(jb, player, wall, 1098.0, 0.0, idx=1)
+    assert sink.take() == [Scrobble("a", 1_000_000, True), Scrobble("b", 1_098_000, False)]
+
+
+def test_the_jukebox_feeds_the_tracker_its_repeat_mode() -> None:
+    jb, *_ = make_scrobbling()
+    assert jb._plays is not None
+    seen: list[bool] = []
+    feed = jb._plays.feed
+
+    def spy(*args: Any) -> list[Scrobble]:
+        if len(args) > 5:
+            seen.append(args[5])
+        return feed(*args)  # type: ignore[no-any-return]
+
+    jb._plays.feed = spy  # type: ignore[method-assign]
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "status")
+    assert seen[-1] is False
+    do(jb, "setRepeat", repeat="one")
+    do(jb, "status")
+    assert seen[-1] is True
+    do(jb, "setRepeat", repeat="all")
+    do(jb, "status")
+    assert seen[-1] is False
 
 
 def test_set_clear_and_removing_the_playing_entry_end_the_play() -> None:

@@ -45,7 +45,11 @@ def listen_threshold(duration_s: int) -> float:
 
 
 class PlayTracker:
-    """Turn device samples into Navidrome scrobbles; knows nothing about the device."""
+    """Turn device samples into Navidrome scrobbles; knows nothing about the device.
+
+    A position that wraps to the start of the same entry is a new play only with repeat one
+    or when the device has stopped; otherwise it is the device lagging behind a track change.
+    """
 
     def __init__(self) -> None:
         self._play: _Play | None = None
@@ -57,10 +61,14 @@ class PlayTracker:
         playing: bool,
         position_s: float,
         now: float,
+        repeat_one: bool = False,
     ) -> list[Scrobble]:
         events: list[Scrobble] = []
         play = self._play
-        if play is not None and (entry != play.entry or self._looped(play, position_s)):
+        if play is not None and (
+            entry != play.entry
+            or (self._wrapped(play, position_s) and (repeat_one or not playing))
+        ):
             events += self._finish()
             play = None
         if entry is None or song is None:
@@ -103,7 +111,7 @@ class PlayTracker:
         return [Scrobble(play.song_id, play.start_ms, True)]
 
     @staticmethod
-    def _looped(play: _Play, position_s: float) -> bool:
+    def _wrapped(play: _Play, position_s: float) -> bool:
         if position_s > LOOP_WINDOW_S or play.last_position <= position_s:
             return False
         if play.duration_s > 0:

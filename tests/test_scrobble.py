@@ -122,17 +122,34 @@ def test_a_long_gap_between_samples_is_capped() -> None:
 def test_repeat_one_counts_each_loop() -> None:
     tracker = PlayTracker()
     play_through(tracker, (1, 0), SHORT, T0, 55)
-    events = tracker.feed((1, 0), SHORT, True, 2.0, T0 + 62)
+    events = tracker.feed((1, 0), SHORT, True, 2.0, T0 + 62, repeat_one=True)
     assert events == [Scrobble("s", ms(T0), True), Scrobble("s", ms(T0 + 60), False)]
     play_through(tracker, (1, 0), SHORT, T0 + 62, 53, first_position=2.0)
-    events = tracker.feed((1, 0), SHORT, True, 1.0, T0 + 121)
+    events = tracker.feed((1, 0), SHORT, True, 1.0, T0 + 121, repeat_one=True)
     assert events == [Scrobble("s", ms(T0 + 60), True), Scrobble("s", ms(T0 + 120), False)]
+
+
+def test_without_repeat_one_a_wrap_to_the_start_is_not_a_new_play() -> None:
+    # the WiiM reports position ~0 on the old index for a sample before it moves on
+    tracker = PlayTracker()
+    first = play_through(tracker, (1, 0), SHORT, T0, 55)
+    assert first == [Scrobble("s", ms(T0), False)]
+    assert tracker.feed((1, 0), SHORT, True, 0.0, T0 + 57) == []
+    assert tracker.feed((1, 0), SHORT, True, 0.0, T0 + 58) == []
+    events = tracker.feed((1, 1), OTHER, True, 1.0, T0 + 59)
+    assert events == [Scrobble("s", ms(T0), True), Scrobble("b", ms(T0 + 58), False)]
+
+
+def test_a_stopped_device_ends_the_play_even_without_repeat_one() -> None:
+    tracker = PlayTracker()
+    play_through(tracker, (1, 0), SHORT, T0, 55)
+    assert tracker.feed((1, 0), SHORT, False, 0.0, T0 + 58) == [Scrobble("s", ms(T0), True)]
 
 
 def test_a_loop_that_was_barely_listened_to_is_not_submitted() -> None:
     tracker = PlayTracker()
     tracker.feed((1, 0), SHORT, True, 58.0, T0)
-    events = tracker.feed((1, 0), SHORT, True, 2.0, T0 + 4)
+    events = tracker.feed((1, 0), SHORT, True, 2.0, T0 + 4, repeat_one=True)
     assert events == [Scrobble("s", ms(T0 + 2), False)]
 
 
@@ -237,7 +254,7 @@ def test_unknown_duration_loop_needs_a_big_drop_to_the_start() -> None:
     play_through(tracker, (1, 0), unknown, T0, 40)
     assert tracker.feed((1, 0), unknown, True, 8.0, T0 + 45) == []
     play_through(tracker, (1, 0), unknown, T0 + 50, 70, first_position=8.0)
-    events = tracker.feed((1, 0), unknown, True, 3.0, T0 + 125)
+    events = tracker.feed((1, 0), unknown, True, 3.0, T0 + 125, repeat_one=True)
     assert events == [Scrobble("u", ms(T0 + 122), False)]
 
 
