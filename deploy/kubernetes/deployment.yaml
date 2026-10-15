@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: wiim-bridge
-          image: ghcr.io/m8-t/navidrome-wiim-bridge:0.6.0
+          image: ghcr.io/m8-t/navidrome-wiim-bridge:0.6.1
           envFrom:
             - configMapRef:
                 name: wiim-bridge
