@@ -8,6 +8,14 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.8.1] - 2026-10-16
+
+### Fixed
+
+- Play reporting no longer sends a second "now playing" for the track that just ended.
+  At a track change the WiiM briefly reports position 0 on the old track; the bridge now
+  treats that as a replay only when repeat is set to one track.
+
 ## [0.8.0] - 2026-10-16
 
 ### Added
