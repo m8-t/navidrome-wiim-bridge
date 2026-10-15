@@ -264,3 +264,48 @@ const REFRESHING_ACTIONS = new Set(["set", "add", "remove", "clear"]);
 export function needsRefresh(calls) {
   return calls.some((call) => REFRESHING_ACTIONS.has(call.action));
 }
+
+const BARRIER_ACTIONS = new Set(["set", "remove", "clear"]);
+
+export function isAddOnly(calls) {
+  return calls.length > 0 && calls.every((call) => call.action === "add");
+}
+
+export function isBarrier(calls) {
+  return calls.some((call) => BARRIER_ACTIONS.has(call.action));
+}
+
+export function needsEntries(statusBody, knownVersion) {
+  const version = statusBody && statusBody.queueVersion;
+  return typeof version !== "string" || version !== knownVersion;
+}
+
+// Add-only batches run on a background lane so playback controls are not stuck behind
+// them; set/remove/clear batches are barriers that wait for the add lane to drain and
+// hold back adds queued after them.
+export function createLanes() {
+  const settled = (promise) => promise.then(() => {}, () => {});
+  let main = Promise.resolve();
+  let adds = Promise.resolve();
+  let barrier = Promise.resolve();
+  let pendingMain = 0;
+  return {
+    pendingMain: () => pendingMain,
+    schedule(calls, task) {
+      if (isAddOnly(calls)) {
+        const result = Promise.all([adds, barrier]).then(task);
+        adds = settled(result);
+        return result;
+      }
+      pendingMain += 1;
+      const wait = isBarrier(calls) ? Promise.all([main, adds]) : main;
+      const result = wait.then(task);
+      const done = settled(result);
+      main = done;
+      if (isBarrier(calls)) barrier = done;
+      return result.finally(() => {
+        pendingMain -= 1;
+      });
+    },
+  };
+}

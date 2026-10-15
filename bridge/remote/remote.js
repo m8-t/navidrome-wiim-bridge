@@ -2,7 +2,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, playCalls, addCalls,
   estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, needsRefresh,
+  mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
 } from "./logic.js";
 
 const STORAGE_KEY = "wiimRemoteAuth";
@@ -62,11 +62,11 @@ let anchorGeneration = 0;
 let forceAnchor = false;
 let tickTimer = null;
 let generation = 0;
-let pendingCommands = 0;
+let knownQueueVersion = null;
+const lanes = createLanes();
 let coverBusy = false;
 let pollInFlight = false;
 let pollAgain = false;
-let queueChain = Promise.resolve();
 let dragging = false;
 let gainTouchedAt = -Infinity;
 let gainTimer = null;
@@ -124,6 +124,7 @@ function signOut(message = "") {
   stopLockSession();
   auth = null;
   entries = [];
+  knownQueueVersion = null;
   queueKey = null;
   mixGenres = null;
   generation += 1;
@@ -200,7 +201,10 @@ function applyStatus(next, list) {
     muted: Boolean(next.muted),
   };
   polledAt = Date.now();
-  if (list) entries = list;
+  if (list) {
+    entries = list;
+    knownQueueVersion = typeof next.queueVersion === "string" ? next.queueVersion : null;
+  }
   render();
   applyMedia();
 }
@@ -374,35 +378,33 @@ function scrollCurrentIntoView() {
 }
 
 function runCommands(calls) {
+  const addLane = isAddOnly(calls);
   const task = async () => {
-    generation += 1;
+    if (!addLane) generation += 1;
+    const sent = generation;
     let ok = true;
     try {
       for (const call of calls) {
         const body = await jukebox(call);
         if (!auth) return false;
-        if (body.jukeboxStatus) applyStatus(body.jukeboxStatus);
+        if (call.action !== "add" && body.jukeboxStatus) applyStatus(body.jukeboxStatus);
       }
       if (needsRefresh(calls)) {
         const { jukeboxPlaylist: list } = await api("jukeboxControl", { action: "get" });
         if (!auth) return false;
-        applyStatus(list, Array.isArray(list.entry) ? list.entry : []);
+        const superseded = addLane && (sent !== generation || lanes.pendingMain() !== 0);
+        if (!superseded) applyStatus(list, Array.isArray(list.entry) ? list.entry : []);
       }
     } catch (err) {
       ok = false;
       handleError(err);
     } finally {
-      generation += 1;
+      if (!addLane) generation += 1;
     }
     if (!ok && auth && needsRefresh(calls)) poll();
     return ok;
   };
-  pendingCommands += 1;
-  const result = queueChain.then(task).finally(() => {
-    pendingCommands -= 1;
-  });
-  queueChain = result.catch(() => {});
-  return result;
+  return lanes.schedule(calls, task);
 }
 
 async function poll() {
@@ -414,11 +416,16 @@ async function poll() {
   pollInFlight = true;
   lastPollAt = Date.now();
   const sent = generation;
+  const stale = () => sent !== generation || lanes.pendingMain() !== 0 || !auth;
   try {
-    const body = await api("jukeboxControl", { action: "get" });
-    if (sent === generation && pendingCommands === 0 && auth) {
-      const list = body.jukeboxPlaylist;
+    const { jukeboxStatus: brief } = await api("jukeboxControl", { action: "status" });
+    if (stale()) return;
+    if (needsEntries(brief, knownQueueVersion)) {
+      const { jukeboxPlaylist: list } = await api("jukeboxControl", { action: "get" });
+      if (stale()) return;
       applyStatus(list, Array.isArray(list.entry) ? list.entry : []);
+    } else {
+      applyStatus(brief);
     }
   } catch (err) {
     handleError(err);
@@ -442,7 +449,10 @@ function startLoops() {
   }, POLL_MS);
   document.addEventListener("visibilitychange", () => {
     renderTime();
-    if (auth && visible()) poll();
+    if (auth && visible()) {
+      knownQueueVersion = null;
+      poll();
+    }
   });
 }
 

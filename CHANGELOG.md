@@ -8,6 +8,21 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [Unreleased]
+
+### Fixed
+
+- Skipping, play/pause, seek and volume on the remote page no longer wait until a long
+  random mix or album has finished appending its tracks.
+- The elapsed time no longer jumps back for a moment right after a seek while the WiiM
+  is still applying it.
+
+### Changed
+
+- The remote page polls with `action=status` and fetches the full queue only when it has
+  changed, instead of downloading the whole queue (about 270 KiB at 500 tracks) every
+  1.5 s. Status replies carry an extra `queueVersion` field for this.
+
 ## [0.6.3] - 2026-10-15
 
 ### Fixed

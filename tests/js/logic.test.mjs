@@ -6,6 +6,7 @@ import {
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, needsRefresh, reconcilePosition,
+  needsEntries, isAddOnly, isBarrier, createLanes,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -394,4 +395,96 @@ test("reconcilePosition never goes backwards over repeated noisy polls", () => {
 
 test("reconcilePosition falls back to the report for a non-finite estimate", () => {
   assert.equal(rec({ shown: NaN }), 10.1);
+});
+
+test("needsEntries compares queueVersion and treats a missing one as changed", () => {
+  assert.equal(needsEntries({ queueVersion: "a:1" }, "a:1"), false);
+  assert.equal(needsEntries({ queueVersion: "a:2" }, "a:1"), true);
+  assert.equal(needsEntries({ queueVersion: "a:1" }, null), true);
+  assert.equal(needsEntries({}, undefined), true);
+  assert.equal(needsEntries(undefined, null), true);
+});
+
+test("isAddOnly and isBarrier classify batches", () => {
+  assert.equal(isAddOnly([]), false);
+  assert.equal(isAddOnly([{ action: "add" }, { action: "add" }]), true);
+  assert.equal(isAddOnly([{ action: "add" }, { action: "skip" }]), false);
+  assert.equal(isBarrier([{ action: "skip" }, { action: "start" }]), false);
+  for (const action of ["set", "remove", "clear"]) assert.equal(isBarrier([{ action }]), true);
+});
+
+function laneHarness() {
+  const lanes = createLanes();
+  const log = [];
+  const gates = {};
+  const run = (name, calls) => {
+    const result = lanes.schedule(calls, () => {
+      log.push(`start ${name}`);
+      return new Promise((resolve) => {
+        gates[name] = () => {
+          log.push(`end ${name}`);
+          resolve(true);
+        };
+      });
+    });
+    return result;
+  };
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+  return { lanes, log, gates, run, tick };
+}
+
+const A = [{ action: "add" }];
+const SKIP = [{ action: "skip" }];
+const SET = [{ action: "set" }, { action: "skip" }, { action: "start" }];
+
+test("lanes: playback batch overtakes a running add batch", async () => {
+  const h = laneHarness();
+  h.run("add1", A);
+  h.run("skip", SKIP);
+  await h.tick();
+  assert.deepEqual([...h.log].sort(), ["start add1", "start skip"]);
+  assert.equal(h.lanes.pendingMain(), 1);
+  h.gates.skip();
+  await h.tick();
+  assert.equal(h.lanes.pendingMain(), 0);
+});
+
+test("lanes: main batches and add batches each keep their own order", async () => {
+  const h = laneHarness();
+  h.run("add1", A);
+  h.run("add2", A);
+  h.run("skip1", SKIP);
+  h.run("skip2", SKIP);
+  await h.tick();
+  assert.deepEqual([...h.log].sort(), ["start add1", "start skip1"]);
+  h.gates.skip1();
+  h.gates.add1();
+  await h.tick();
+  assert.deepEqual(h.log.slice(2).sort(), ["end add1", "end skip1", "start add2", "start skip2"]);
+});
+
+test("lanes: set waits for the add lane and holds back later adds", async () => {
+  const h = laneHarness();
+  h.run("add1", A);
+  h.run("set", SET);
+  h.run("add2", A);
+  h.run("skip", SKIP);
+  await h.tick();
+  assert.deepEqual(h.log, ["start add1"]);
+  h.gates.add1();
+  await h.tick();
+  assert.deepEqual(h.log.slice(1), ["end add1", "start set"]);
+  h.gates.set();
+  await h.tick();
+  assert.deepEqual(h.log.slice(3).sort(), ["end set", "start add2", "start skip"]);
+});
+
+test("lanes: a failing batch does not wedge its lane", async () => {
+  const lanes = createLanes();
+  const failed = lanes.schedule(SKIP, async () => {
+    throw new Error("boom");
+  });
+  await assert.rejects(failed);
+  assert.equal(await lanes.schedule(SKIP, async () => true), true);
+  assert.equal(lanes.pendingMain(), 0);
 });

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Any
 
@@ -167,6 +168,8 @@ def names(player: FakePlayer) -> list[str]:
 def test_set_returns_status_and_touches_no_device() -> None:
     jb, player = make()
     payload = do(jb, "set", ["a", "b"])
+    version = payload["jukeboxStatus"].pop("queueVersion")
+    assert re.fullmatch(r"[0-9a-f]+:1", version)
     assert payload == {
         "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0, "positionMs": 0, "muted": False}
     }
@@ -831,3 +834,106 @@ def test_position_ms_resume_does_not_count_paused_time() -> None:
     wall[0] = 1060.5
     player.sampled_at = 1060.2
     assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 10300
+
+
+def version_of(jb: Jukebox) -> str:
+    return str(do(jb, "status")["jukeboxStatus"]["queueVersion"])
+
+
+def test_queue_version_bumps_only_when_songs_change() -> None:
+    jb, player = make()
+    first = version_of(jb)
+    assert first == version_of(jb)
+    seen = [first]
+    for action, kw in (
+        ("set", {"ids": ["a", "b"]}),
+        ("add", {"ids": ["c"]}),
+        ("remove", {"index": 2}),
+        ("clear", {}),
+    ):
+        do(jb, action, **kw)
+        seen.append(version_of(jb))
+    assert len(set(seen)) == len(seen)
+    do(jb, "set", ["a", "b"])
+    before = version_of(jb)
+    do(jb, "skip", index=1, offset=0)
+    do(jb, "start")
+    do(jb, "stop")
+    assert version_of(jb) == before
+    assert do(jb, "get")["jukeboxPlaylist"]["queueVersion"] == before
+
+
+def test_queue_version_boot_id_differs_between_instances() -> None:
+    assert version_of(make()[0]).split(":")[0] != version_of(make()[0]).split(":")[0]
+
+
+def test_add_does_not_sync_the_device() -> None:
+    jb, player = make()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    player.pre_refreshes = [(5, True)]
+    do(jb, "add", ["b"])
+    assert player.pre_refreshes == [(5, True)]
+    assert names(player)[-1] == "append"
+
+
+def seeking_setup() -> tuple[Jukebox, FakePlayer, list[float]]:
+    jb, player, wall = make_walled()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.pos, player.sampled_at = 50.0, wall[0]
+    do(jb, "skip", index=0, offset=100)
+    return jb, player, wall
+
+
+def test_seek_hold_masks_stale_position() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 1.0
+    player.pos, player.sampled_at = 51.0, wall[0]
+    status = do(jb, "status")["jukeboxStatus"]
+    assert status["position"] == 101
+    assert status["positionMs"] == 101000
+
+
+def test_seek_hold_releases_when_device_reaches_target() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 1.2
+    player.pos, player.sampled_at = 101.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 101000
+    wall[0] += 0.5
+    player.pos, player.sampled_at = 100.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 100000
+
+
+def test_seek_hold_releases_on_index_change() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 1.0
+    player.idx, player.pos, player.sampled_at = 1, 3.0, wall[0]
+    status = do(jb, "status")["jukeboxStatus"]
+    assert (status["currentIndex"], status["positionMs"]) == (1, 3000)
+    player.idx, player.pos, player.sampled_at = 0, 4.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 4000
+
+
+def test_seek_hold_releases_on_pause() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 1.0
+    player.is_playing, player.pos, player.sampled_at = False, 51.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 51000
+    player.is_playing, player.sampled_at = True, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 51000
+
+
+def test_seek_hold_expires_after_three_seconds() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 3.5
+    player.pos, player.sampled_at = 52.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 52000
+
+
+def test_seek_hold_dropped_by_new_seek() -> None:
+    jb, player, wall = seeking_setup()
+    wall[0] += 1.0
+    do(jb, "skip", index=0, offset=10)
+    player.pos, player.sampled_at = 10.0, wall[0]
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 10000
