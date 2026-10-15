@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, swipeAction, swipeTarget, swipeOffset, swipeNeighbour,
+  mediaMetadataInit, positionState, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, nextPage,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -259,4 +259,12 @@ test("swipeNeighbour", () => {
   assert.equal(swipeNeighbour(-50, 0, 0), null);
   assert.equal(swipeNeighbour(0, 2, 5), null);
   assert.equal(swipeNeighbour(NaN, 2, 5), null);
+});
+
+test("nextPage", () => {
+  assert.deepEqual(nextPage({ offset: 0 }, 40, 40), { offset: 40, done: false });
+  assert.deepEqual(nextPage({ offset: 40 }, 40, 40), { offset: 80, done: false });
+  assert.deepEqual(nextPage({ offset: 120 }, 10, 40), { offset: 130, done: true });
+  assert.deepEqual(nextPage({ offset: 0 }, 0, 40), { offset: 0, done: true });
+  assert.deepEqual(nextPage({ offset: 40 }, NaN, 40), { offset: 40, done: true });
 });

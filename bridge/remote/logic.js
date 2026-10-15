@@ -62,6 +62,11 @@ export function swipeTarget(action, index, length) {
   return null;
 }
 
+export function nextPage(state, receivedCount, pageSize) {
+  const received = Number.isFinite(receivedCount) && receivedCount > 0 ? receivedCount : 0;
+  return { offset: state.offset + received, done: received < pageSize };
+}
+
 export function chunk(ids, size = 50) {
   if (!(size >= 1)) throw new RangeError("size must be at least 1");
   const out = [];

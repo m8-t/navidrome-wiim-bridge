@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, nextPage, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState,
@@ -15,6 +15,7 @@ const STATUS_MS = 4000;
 const SWIPE_FEEDBACK_PX = 8;
 const SWIPE_GAP_PX = 24;
 const SWIPE_ANIM_MS = 250;
+const PAGE_SIZE = 40;
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) => $(`icon-${name}`).content.cloneNode(true);
@@ -71,6 +72,8 @@ let needGesture = false;
 let metaKey = null;
 let lastPollAt = 0;
 let sheetReturnFocus = null;
+let paging = { offset: 0, done: false, loading: false, observer: null, sentinel: null, grid: null };
+let libraryScroll = 0;
 
 function showStatus(message, info = false) {
   const node = $("status");
@@ -603,34 +606,99 @@ function songRow(song) {
   return row;
 }
 
+function resetPaging() {
+  if (paging.observer) paging.observer.disconnect();
+  paging = { offset: 0, done: false, loading: false, observer: null, sentinel: null, grid: null };
+}
+
+async function fetchAlbumPage(offset) {
+  const body = await api("getAlbumList2", { type: "newest", size: PAGE_SIZE, offset });
+  return (body.albumList2 && body.albumList2.album) || [];
+}
+
+function stopPaging(state) {
+  state.observer.disconnect();
+  state.sentinel.remove();
+}
+
+function watchSentinel(state) {
+  state.sentinel = el("div", "sentinel");
+  state.sentinel.setAttribute("aria-hidden", "true");
+  state.observer = new IntersectionObserver(
+    (changes) => { if (changes.some((c) => c.isIntersecting)) loadMore(); },
+    { root: $("library-list"), rootMargin: "0px 0px 800px 0px" },
+  );
+  $("library-list").append(state.sentinel);
+  state.observer.observe(state.sentinel);
+}
+
+function advancePaging(state, count) {
+  Object.assign(state, nextPage(state, count, PAGE_SIZE));
+  if (state.done) {
+    stopPaging(state);
+    return;
+  }
+  state.observer.unobserve(state.sentinel);
+  state.observer.observe(state.sentinel);
+}
+
+async function loadMore() {
+  const state = paging;
+  const token = searchToken;
+  if (state.loading || state.done || !state.grid) return;
+  state.loading = true;
+  try {
+    const albums = await fetchAlbumPage(state.offset);
+    if (token !== searchToken) return;
+    for (const album of albums) state.grid.append(albumCard(album));
+    advancePaging(state, albums.length);
+  } catch (err) {
+    if (token === searchToken) handleError(err);
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function loadRecent(token, list) {
+  const albums = await fetchAlbumPage(0);
+  if (token !== searchToken) return;
+  if (!albums.length) {
+    list.replaceChildren(el("p", "nothing", "Nothing found"));
+    return;
+  }
+  const grid = albumGrid(albums);
+  list.replaceChildren(el("h2", "section", "Recently added"), grid);
+  paging.grid = grid;
+  watchSentinel(paging);
+  advancePaging(paging, albums.length);
+}
+
+async function loadSearch(token, list, query) {
+  const body = await api("search3", {
+    query, albumCount: 20, songCount: 20, artistCount: 0,
+  });
+  const result = body.searchResult3 || {};
+  const albums = result.album || [];
+  const songs = result.song || [];
+  const nodes = [];
+  if (albums.length) nodes.push(el("h2", "section", "Albums"), albumGrid(albums));
+  if (songs.length) {
+    const ul = el("ul", "list songs");
+    for (const song of songs) ul.append(songRow(song));
+    nodes.push(el("h2", "section", "Songs"), ul);
+  }
+  if (!nodes.length) nodes.push(el("p", "nothing", "Nothing found"));
+  if (token === searchToken) list.replaceChildren(...nodes);
+}
+
 async function loadLibrary() {
   const token = ++searchToken;
+  resetPaging();
   const query = $("search").value.trim();
   const list = $("library-list");
   try {
-    let nodes = [];
-    if (query === "") {
-      const body = await api("getAlbumList2", { type: "newest", size: 40 });
-      const albums = (body.albumList2 && body.albumList2.album) || [];
-      nodes = albums.length
-        ? [el("h2", "section", "Recently added"), albumGrid(albums)]
-        : [el("p", "nothing", "Nothing found")];
-    } else {
-      const body = await api("search3", {
-        query, albumCount: 20, songCount: 20, artistCount: 0,
-      });
-      const result = body.searchResult3 || {};
-      const albums = result.album || [];
-      const songs = result.song || [];
-      if (albums.length) nodes.push(el("h2", "section", "Albums"), albumGrid(albums));
-      if (songs.length) {
-        const ul = el("ul", "list songs");
-        for (const song of songs) ul.append(songRow(song));
-        nodes.push(el("h2", "section", "Songs"), ul);
-      }
-      if (!nodes.length) nodes.push(el("p", "nothing", "Nothing found"));
-    }
-    if (token === searchToken) list.replaceChildren(...nodes);
+    if (query === "") await loadRecent(token, list);
+    else await loadSearch(token, list, query);
   } catch (err) {
     if (token === searchToken) handleError(err);
   }
@@ -661,6 +729,7 @@ async function openAlbum(album) {
       row.querySelector(".main").addEventListener("click", () => playAndShow(playCalls(allIds, i)));
       tracks.append(fragment);
     });
+    libraryScroll = $("library-list").scrollTop;
     $("album-view").hidden = false;
     $("library-list").hidden = true;
     $("library-bar").hidden = true;
@@ -674,6 +743,7 @@ function closeAlbum() {
   $("album-view").hidden = true;
   $("library-list").hidden = false;
   $("library-bar").hidden = false;
+  $("library-list").scrollTop = libraryScroll;
 }
 
 function bindLibrary() {
@@ -903,6 +973,9 @@ function enterApp() {
   setTab("player");
   closeAlbum();
   $("library-list").replaceChildren();
+  searchToken += 1;
+  resetPaging();
+  libraryScroll = 0;
   if (lockPreferred() && mediaSupported()) startLockSession(false);
   poll();
 }

@@ -12,6 +12,10 @@ Each release is published as a container image:
 
 ### Added
 
+- Phone page: the library is endless. "Recently added" loads 40 albums at a time and
+  fetches the next 40 as you scroll towards the end, until the whole library is listed.
+  The scroll position is kept when you open an album and go back. On wide screens the
+  grid shows five columns.
 - The Kubernetes manifests in `deploy/kubernetes/` now deploy the whole stack, not the
   bridge alone: Navidrome (ConfigMap, Deployment, Service and a volume claim for its
   database, with the music library as a read-only NFS volume) and the patched Feishin
