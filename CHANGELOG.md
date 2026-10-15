@@ -8,6 +8,15 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [Unreleased]
+
+### Fixed
+
+- Songs added to a queue that is already playing (random mix beyond the first 50, "Add
+  to queue", Feishin adds) were inserted right after the playing track in reverse batch
+  order on the WiiM, so the page showed and skipped to different songs than the device
+  played. They are now appended at the end of the queue.
+
 ## [0.6.0] - 2026-10-15
 
 ### Added

@@ -354,6 +354,7 @@ class Wiim:
         )
 
     async def queue_insert(self, context: str, after_index: int, play: bool = False) -> str:
+        """Insert after the playing track on the device; StartIndex is ignored."""
         return await self._queue_call(
             "AppendTracksInQueueEx",
             {
@@ -361,6 +362,18 @@ class Wiim:
                 "Direction": "1",
                 "StartIndex": str(after_index),
                 "Play": "1" if play else "0",
+                "Action": "",
+            },
+        )
+
+    async def queue_append(self, context: str, start_index: int) -> str:
+        return await self._queue_call(
+            "AppendTracksInQueueEx",
+            {
+                "QueueContext": context,
+                "Direction": "0",
+                "StartIndex": str(start_index),
+                "Play": "0",
                 "Action": "",
             },
         )

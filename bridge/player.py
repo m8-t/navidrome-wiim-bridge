@@ -116,19 +116,13 @@ class Player:
         await self._wiim.queue_play(self._queue_name, index + 1)
         self._index = index
 
-    async def insert(self, tracks: Sequence[Track], after: int) -> None:
-        if not tracks:
-            return
-        self._check_index(after)
-        context = build_queue_context(self._queue_name, self._queue_tracks(tracks))
-        await self._wiim.queue_insert(context, after_index=after + 1)
-        self._tracks[after + 1 : after + 1] = tracks
-        if self._index is not None and after < self._index:
-            self._index += len(tracks)
-
     async def append(self, tracks: Sequence[Track]) -> None:
         self._require_queue()
-        await self.insert(tracks, after=len(self._tracks) - 1)
+        if not tracks:
+            return
+        context = build_queue_context(self._queue_name, self._queue_tracks(tracks))
+        await self._wiim.queue_append(context, start_index=len(self._tracks))
+        self._tracks.extend(tracks)
 
     async def remove(self, index: int) -> None:
         self._check_index(index)

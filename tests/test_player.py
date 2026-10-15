@@ -45,6 +45,9 @@ class FakeWiim:
     async def queue_insert(self, context: str, after_index: int, play: bool = False) -> str:
         return await self._record("queue_insert", context, after_index)
 
+    async def queue_append(self, context: str, start_index: int) -> str:
+        return await self._record("queue_append", context, start_index)
+
     async def queue_remove(self, name: str, start: int, end: int) -> str:
         return await self._record("queue_remove", name, start, end)
 
@@ -165,28 +168,27 @@ def test_play_index() -> None:
         run(empty.play_index(0))
 
 
-def test_insert_before_current_shifts_index() -> None:
+def test_append_goes_to_end_and_keeps_index() -> None:
     player, fake = loaded(start=2)
-    run(player.insert([tr("n1"), tr("n2")], after=0))
+    run(player.append([tr("n1"), tr("n2")]))
+    assert len(fake.calls) == 1
     name, args = fake.calls[0]
-    assert name == "queue_insert"
-    assert args[1] == 1
+    assert name == "queue_append"
+    assert args[1] == 3
     assert url_for("n1") in args[0] and url_for("n2") in args[0]
     assert url_for("t0") not in args[0]
-    assert [t.song_id for t in player.tracks] == ["t0", "n1", "n2", "t1", "t2"]
-    assert player.index == 4
+    assert [t.song_id for t in player.tracks] == ["t0", "t1", "t2", "n1", "n2"]
+    assert player.index == 2
+    run(player.append([tr("n3")]))
+    assert fake.calls[1][1][1] == 5
+    assert all(c[0] != "queue_insert" for c in fake.calls)
 
 
-def test_insert_after_current_and_append() -> None:
+def test_append_empty_and_unloaded() -> None:
     player, fake = loaded(start=1)
-    run(player.insert([tr("n1")], after=1))
-    assert player.index == 1
-    assert fake.calls[0][1][1] == 2
-    run(player.append([tr("n2")]))
-    assert fake.calls[1][1][1] == 4
-    assert [t.song_id for t in player.tracks][-1] == "n2"
-    with pytest.raises(ValueError):
-        run(player.insert([tr("x")], after=-1))
+    fake.calls.clear()
+    run(player.append([]))
+    assert fake.calls == []
     empty = Player(FakeWiim(), url_for)  # type: ignore[arg-type]
     with pytest.raises(PlayerError):
         run(empty.append([tr("x")]))

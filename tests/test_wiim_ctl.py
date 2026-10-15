@@ -731,6 +731,17 @@ def test_wiim_queue_insert() -> None:
     assert "<Play>1</Play>" in playing
 
 
+def test_wiim_queue_append() -> None:
+    context = build_queue_context("q", TWO_TRACKS)
+    header, body = _queue_call_body(lambda w: w.queue_append(context, 3))
+    assert header == '"urn:schemas-wiimu-com:service:PlayQueue:1#AppendTracksInQueueEx"'
+    assert "&lt;PlayList&gt;" in body
+    assert (
+        "<Direction>0</Direction><StartIndex>3</StartIndex><Play>0</Play><Action></Action>"
+        in body
+    )
+
+
 def test_wiim_set_volume() -> None:
     render_calls: list[tuple[str, str]] = []
 
