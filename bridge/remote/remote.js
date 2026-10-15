@@ -2,7 +2,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState,
+  mediaMetadataInit, positionState, needsRefresh,
 } from "./logic.js";
 
 const STORAGE_KEY = "wiimRemoteAuth";
@@ -334,19 +334,20 @@ function scrollCurrentIntoView() {
   if (row) row.scrollIntoView({ block: "center" });
 }
 
-const REFRESHING = new Set(["set", "add", "remove", "clear"]);
-
 function runCommands(calls) {
   const task = async () => {
     generation += 1;
-    let refresh = false;
     let ok = true;
     try {
       for (const call of calls) {
-        if (REFRESHING.has(call.action)) refresh = true;
         const body = await jukebox(call);
         if (!auth) return false;
         if (body.jukeboxStatus) applyStatus(body.jukeboxStatus);
+      }
+      if (needsRefresh(calls)) {
+        const { jukeboxPlaylist: list } = await api("jukeboxControl", { action: "get" });
+        if (!auth) return false;
+        applyStatus(list, Array.isArray(list.entry) ? list.entry : []);
       }
     } catch (err) {
       ok = false;
@@ -354,7 +355,7 @@ function runCommands(calls) {
     } finally {
       generation += 1;
     }
-    if (auth && refresh) poll();
+    if (!ok && auth && needsRefresh(calls)) poll();
     return ok;
   };
   pendingCommands += 1;

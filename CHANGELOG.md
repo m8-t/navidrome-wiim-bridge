@@ -8,6 +8,13 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.6.2] - 2026-10-15
+
+### Fixed
+
+- The page now shows a new random mix or large album queue right away (the first batch
+  of tracks) instead of keeping the old queue and covers until all tracks are appended.
+
 ## [0.6.1] - 2026-10-15
 
 ### Fixed

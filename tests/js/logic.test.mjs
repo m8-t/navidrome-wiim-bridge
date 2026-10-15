@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, needsRefresh,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -351,4 +351,11 @@ test("mergeRandom does not touch its input and uses every item", () => {
   assert.deepEqual(list.map((s) => s.id), copy);
   assert.equal(new Set(merged.map((s) => s.id)).size, 200);
   assert.notDeepEqual(merged.map((s) => s.id), copy);
+});
+
+test("needsRefresh is true only for queue-changing calls", () => {
+  assert.equal(needsRefresh([{ action: "set", id: ["a"] }, { action: "start" }]), true);
+  assert.equal(needsRefresh([{ action: "add", id: ["a"] }]), true);
+  assert.equal(needsRefresh([{ action: "skip", index: 0, offset: 0 }, { action: "start" }]), false);
+  assert.equal(needsRefresh([]), false);
 });

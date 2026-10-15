@@ -246,3 +246,9 @@ export function mergeRandom(lists, count, rng = Math.random) {
   }
   return songs.slice(0, Math.max(0, count));
 }
+
+const REFRESHING_ACTIONS = new Set(["set", "add", "remove", "clear"]);
+
+export function needsRefresh(calls) {
+  return calls.some((call) => REFRESHING_ACTIONS.has(call.action));
+}
