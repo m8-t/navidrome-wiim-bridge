@@ -7,6 +7,8 @@ import {
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, isInterlude, collectMix, needsRefresh, reconcilePosition,
   needsEntries, isAddOnly, isBarrier, createLanes,
+  insertCalls, playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep,
+  sortAlbumsByYear, countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -46,6 +48,29 @@ test("nextTarget", () => {
   assert.equal(nextTarget(1, 3), 2);
   assert.equal(nextTarget(2, 3), null);
   assert.equal(nextTarget(0, 0), null);
+});
+
+test("nextTarget wraps to the first track only with repeat all", () => {
+  assert.equal(nextTarget(2, 3, "all"), 0);
+  assert.equal(nextTarget(2, 3, "off"), null);
+  assert.equal(nextTarget(2, 3, "one"), null);
+  assert.equal(nextTarget(2, 3, undefined), null);
+  assert.equal(nextTarget(0, 1, "all"), 0);
+  assert.equal(nextTarget(0, 3, "all"), 1);
+  assert.equal(nextTarget(0, 3, "one"), 1);
+  assert.equal(nextTarget(0, 0, "all"), null);
+});
+
+test("normalizeRepeat and nextRepeat cycle off, all, one", () => {
+  assert.equal(normalizeRepeat("all"), "all");
+  assert.equal(normalizeRepeat("one"), "one");
+  assert.equal(normalizeRepeat("off"), "off");
+  for (const bad of [undefined, null, "", "ALL", 1, true]) assert.equal(normalizeRepeat(bad), "off");
+  assert.equal(nextRepeat("off"), "all");
+  assert.equal(nextRepeat("all"), "one");
+  assert.equal(nextRepeat("one"), "off");
+  assert.equal(nextRepeat(undefined), "all");
+  assert.equal(nextRepeat("junk"), "all");
 });
 
 test("chunk", () => {
@@ -357,6 +382,8 @@ test("mergeRandom does not touch its input and uses every item", () => {
 test("needsRefresh is true only for queue-changing calls", () => {
   assert.equal(needsRefresh([{ action: "set", id: ["a"] }, { action: "start" }]), true);
   assert.equal(needsRefresh([{ action: "add", id: ["a"] }]), true);
+  for (const action of ["insert", "move", "setShuffle"]) assert.equal(needsRefresh([{ action }]), true, action);
+  assert.equal(needsRefresh([{ action: "setRepeat", repeat: "all" }]), false);
   assert.equal(needsRefresh([{ action: "skip", index: 0, offset: 0 }, { action: "start" }]), false);
   assert.equal(needsRefresh([]), false);
 });
@@ -410,7 +437,9 @@ test("isAddOnly and isBarrier classify batches", () => {
   assert.equal(isAddOnly([{ action: "add" }, { action: "add" }]), true);
   assert.equal(isAddOnly([{ action: "add" }, { action: "skip" }]), false);
   assert.equal(isBarrier([{ action: "skip" }, { action: "start" }]), false);
-  for (const action of ["set", "remove", "clear"]) assert.equal(isBarrier([{ action }]), true);
+  for (const action of ["set", "remove", "clear", "setShuffle"]) assert.equal(isBarrier([{ action }]), true);
+  for (const action of ["insert", "move", "setRepeat", "setGain"]) assert.equal(isBarrier([{ action }]), false);
+  for (const action of ["insert", "move", "setShuffle", "setRepeat"]) assert.equal(isAddOnly([{ action }]), false);
 });
 
 function laneHarness() {
@@ -479,6 +508,34 @@ test("lanes: set waits for the add lane and holds back later adds", async () => 
   assert.deepEqual(h.log.slice(3).sort(), ["end set", "start add2", "start skip"]);
 });
 
+test("lanes: setShuffle waits for the add lane and holds back later adds", async () => {
+  const h = laneHarness();
+  h.run("add1", A);
+  h.run("shuffle", [{ action: "setShuffle", shuffle: "true" }]);
+  h.run("add2", A);
+  await h.tick();
+  assert.deepEqual(h.log, ["start add1"]);
+  h.gates.add1();
+  await h.tick();
+  assert.deepEqual(h.log.slice(1), ["end add1", "start shuffle"]);
+  h.gates.shuffle();
+  await h.tick();
+  assert.deepEqual(h.log.slice(3), ["end shuffle", "start add2"]);
+});
+
+test("lanes: insert and move run on the control lane next to a running add batch", async () => {
+  const h = laneHarness();
+  h.run("add1", A);
+  h.run("insert", [{ action: "insert" }]);
+  h.run("move", [{ action: "move" }]);
+  await h.tick();
+  assert.deepEqual([...h.log].sort(), ["start add1", "start insert"]);
+  assert.equal(h.lanes.pendingMain(), 2);
+  h.gates.insert();
+  await h.tick();
+  assert.deepEqual([...h.log].sort(), ["end insert", "start add1", "start insert", "start move"]);
+});
+
 test("lanes: a failing batch does not wedge its lane", async () => {
   const lanes = createLanes();
   const failed = lanes.schedule(SKIP, async () => {
@@ -537,4 +594,192 @@ test("collectMix dedupes across rounds and stops when nothing new arrives", asyn
   assert.equal(round, 2);
   assert.equal(songs.length, 6);
   assert.equal(short, true);
+});
+
+test("insertCalls reverses the chunks and keeps each chunk in order", () => {
+  assert.deepEqual(insertCalls([]), []);
+  assert.deepEqual(insertCalls(["a", "b"]), [{ action: "insert", ids: ["a", "b"] }]);
+  const calls = insertCalls(ids(120));
+  assert.deepEqual(calls.map((c) => c.action), ["insert", "insert", "insert"]);
+  assert.deepEqual(calls.map((c) => c.ids.length), [20, 50, 50]);
+});
+
+test("insertCalls reproduces the input order when each insert lands after the current track", () => {
+  for (const n of [1, 49, 50, 51, 100, 101, 137]) {
+    const input = ids(n);
+    const queue = ["cur", "x", "y"];
+    for (const call of insertCalls(input)) queue.splice(1, 0, ...call.ids);
+    assert.deepEqual(queue, ["cur", ...input, "x", "y"], `n=${n}`);
+  }
+});
+
+test("playNextCalls inserts into a queue and appends in order to an empty one", () => {
+  assert.deepEqual(playNextCalls(ids(2), 3), insertCalls(ids(2)));
+  assert.deepEqual(playNextCalls(ids(2), 0), addCalls(ids(2)));
+  const empty = playNextCalls(ids(120), 0);
+  assert.deepEqual(empty.map((c) => c.action), ["add", "add", "add"]);
+  assert.deepEqual(empty.flatMap((c) => c.ids), ids(120));
+  assert.deepEqual(playNextCalls([], 4), []);
+});
+
+test("moveEntry matches splice for every pair and leaves its input alone", () => {
+  const base = ids(7);
+  for (let from = 0; from < base.length; from++) {
+    for (let to = 0; to < base.length; to++) {
+      const expected = base.slice();
+      expected.splice(to, 0, ...expected.splice(from, 1));
+      assert.deepEqual(moveEntry(base, from, to), expected, `${from}->${to}`);
+    }
+  }
+  assert.deepEqual(base, ids(7));
+  assert.deepEqual(moveEntry(base, 3, 3), base);
+  assert.deepEqual(moveEntry(base, -1, 2), base);
+  assert.deepEqual(moveEntry(base, 2, 7), base);
+  assert.deepEqual(moveEntry(base, 1.5, 2), base);
+  assert.deepEqual(moveEntry([], 0, 0), []);
+});
+
+test("indexAfterMove tracks the current song through every possible move", () => {
+  const n = 7;
+  for (let current = 0; current < n; current++) {
+    for (let from = 0; from < n; from++) {
+      for (let to = 0; to < n; to++) {
+        const marked = ids(n);
+        const moved = moveEntry(marked, from, to);
+        assert.equal(indexAfterMove(current, from, to), moved.indexOf(`id${current}`), `current=${current} ${from}->${to}`);
+      }
+    }
+  }
+});
+
+test("indexAfterMove spot checks", () => {
+  assert.equal(indexAfterMove(3, 1, 5), 2);
+  assert.equal(indexAfterMove(3, 5, 1), 4);
+  assert.equal(indexAfterMove(3, 5, 3), 4);
+  assert.equal(indexAfterMove(3, 1, 3), 2);
+  assert.equal(indexAfterMove(3, 0, 2), 3);
+  assert.equal(indexAfterMove(3, 6, 4), 3);
+  assert.equal(indexAfterMove(3, 3, 6), 6);
+  assert.equal(indexAfterMove(-1, 2, 4), -1);
+});
+
+test("dragTargetIndex rounds to the nearest row and clamps", () => {
+  assert.equal(dragTargetIndex(4, 0, 60, 10), 4);
+  assert.equal(dragTargetIndex(4, 29, 60, 10), 4);
+  assert.equal(dragTargetIndex(4, 31, 60, 10), 5);
+  assert.equal(dragTargetIndex(4, -31, 60, 10), 3);
+  assert.equal(dragTargetIndex(4, 130, 60, 10), 6);
+  assert.equal(dragTargetIndex(4, 9999, 60, 10), 9);
+  assert.equal(dragTargetIndex(4, -9999, 60, 10), 0);
+  assert.equal(dragTargetIndex(4, 100, 0, 10), 4);
+  assert.equal(dragTargetIndex(4, NaN, 60, 10), 4);
+  assert.equal(dragTargetIndex(0, 100, 60, 0), 0);
+});
+
+test("dragShift opens a gap between the grabbed row and the drop slot", () => {
+  const shifts = (from, to, n = 6) => Array.from({ length: n }, (_, i) => dragShift(i, from, to));
+  assert.deepEqual(shifts(1, 4), [0, 0, -1, -1, -1, 0]);
+  assert.deepEqual(shifts(4, 1), [0, 1, 1, 1, 0, 0]);
+  assert.deepEqual(shifts(2, 2), [0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(shifts(0, 5), [0, -1, -1, -1, -1, -1]);
+  assert.deepEqual(shifts(5, 0), [1, 1, 1, 1, 1, 0]);
+});
+
+test("dragShift agrees with moveEntry about where every row ends up", () => {
+  const n = 6;
+  for (let from = 0; from < n; from++) {
+    for (let to = 0; to < n; to++) {
+      const moved = moveEntry(ids(n), from, to);
+      for (let i = 0; i < n; i++) {
+        if (i === from) continue;
+        assert.equal(moved.indexOf(`id${i}`), i + dragShift(i, from, to), `${from}->${to} row ${i}`);
+      }
+    }
+  }
+});
+
+test("autoScrollStep scrolls inside the edge zones only and speeds up towards the edge", () => {
+  assert.equal(autoScrollStep(300, 100, 700), 0);
+  assert.equal(autoScrollStep(160, 100, 700), 0);
+  assert.equal(autoScrollStep(640, 100, 700), 0);
+  assert.equal(autoScrollStep(130, 100, 700), -9);
+  assert.equal(autoScrollStep(100, 100, 700), -18);
+  assert.equal(autoScrollStep(40, 100, 700), -18);
+  assert.equal(autoScrollStep(670, 100, 700), 9);
+  assert.equal(autoScrollStep(700, 100, 700), 18);
+  assert.equal(autoScrollStep(999, 100, 700), 18);
+  assert.ok(autoScrollStep(110, 100, 700) < autoScrollStep(140, 100, 700));
+  assert.equal(autoScrollStep(NaN, 100, 700), 0);
+  assert.equal(autoScrollStep(100, 700, 100), 0);
+  assert.equal(autoScrollStep(110, 100, 130), -6);
+  assert.equal(autoScrollStep(115, 100, 130), 0);
+  assert.equal(autoScrollStep(100, 100, 700, 60, 30), -30);
+});
+
+test("sortAlbumsByYear puts the newest first, missing years last, ties stable", () => {
+  const albums = [
+    { id: "a", year: 1999 }, { id: "b" }, { id: "c", year: 2010 }, { id: "d", year: 1999 },
+    { id: "e", year: 0 }, { id: "f", year: "2005" }, { id: "g", year: null },
+  ];
+  assert.deepEqual(sortAlbumsByYear(albums).map((a) => a.id), ["c", "f", "a", "d", "b", "e", "g"]);
+  assert.deepEqual(albums.map((a) => a.id), ["a", "b", "c", "d", "e", "f", "g"]);
+  assert.deepEqual(sortAlbumsByYear([]), []);
+});
+
+test("countLabel pluralises", () => {
+  assert.equal(countLabel(0, "song"), "0 songs");
+  assert.equal(countLabel(1, "song"), "1 song");
+  assert.equal(countLabel(2, "album"), "2 albums");
+  assert.equal(countLabel(undefined, "song"), "0 songs");
+  assert.equal(countLabel("3", "song"), "3 songs");
+});
+
+test("playlistInfo joins owner and queue summary", () => {
+  assert.equal(playlistInfo("dan", [{ duration: 240 }, { duration: 60 }]), "dan \u00b7 2 tracks, 5 min");
+  assert.equal(playlistInfo("", [{ duration: 60 }]), "1 track, 1 min");
+  assert.equal(playlistInfo("dan", []), "dan");
+  assert.equal(playlistInfo(undefined, undefined), "");
+});
+
+test("ownPlaylists keeps only the user's own playlists", () => {
+  const lists = [{ id: "1", owner: "dan" }, { id: "2", owner: "alice" }, { id: "3" }, { id: "4", owner: "dan" }, null];
+  assert.deepEqual(ownPlaylists(lists, "dan").map((p) => p.id), ["1", "4"]);
+  assert.deepEqual(ownPlaylists(lists, "bob"), []);
+  assert.deepEqual(ownPlaylists(undefined, "dan"), []);
+});
+
+test("createViewStack restores each view's scroll position on the way back", () => {
+  const stack = createViewStack();
+  assert.equal(stack.depth(), 0);
+  assert.equal(stack.top(), null);
+  stack.push({ kind: "artist", id: "ar1" }, 500);
+  assert.equal(stack.rootScroll(), 500);
+  assert.equal(stack.top().scroll, 0);
+  stack.push({ kind: "album", id: "al1" }, 120);
+  stack.push({ kind: "artist", id: "ar1" }, 30);
+  assert.equal(stack.depth(), 3);
+  assert.deepEqual(stack.all().map((f) => f.id), ["ar1", "al1", "ar1"]);
+  assert.equal(stack.rootScroll(), 500);
+  assert.equal(stack.pop().kind, "album");
+  assert.equal(stack.top().scroll, 30);
+  const artist = stack.pop();
+  assert.equal(artist.kind, "artist");
+  assert.equal(artist.scroll, 120);
+  assert.equal(stack.pop(), null);
+  assert.equal(stack.depth(), 0);
+  assert.equal(stack.rootScroll(), 500);
+  assert.equal(stack.pop(), null);
+});
+
+test("createViewStack clear keeps the list scroll, reset forgets it", () => {
+  const stack = createViewStack();
+  stack.push({ kind: "album" }, 80);
+  stack.push({ kind: "artist" }, 10);
+  stack.clear();
+  assert.equal(stack.depth(), 0);
+  assert.equal(stack.rootScroll(), 80);
+  stack.push({ kind: "album" }, 80);
+  stack.reset();
+  assert.equal(stack.depth(), 0);
+  assert.equal(stack.rootScroll(), 0);
 });

@@ -33,15 +33,18 @@
             <div id="title" class="title"></div>
             <div id="artist" class="artist"></div>
             <div id="album" class="album"></div>
+            <button id="playlist-add" type="button" class="round r44 plain meta-add" aria-label="Add to playlist" title="Add to playlist"><span class="ic" data-icon="playlist-add"></span></button>
           </div>
           <div class="seek">
             <input id="seek" class="slider" type="range" min="0" max="0" step="1" value="0" aria-label="Seek">
             <div class="times"><span id="elapsed" class="time">0:00</span><span id="total" class="time">0:00</span></div>
           </div>
           <div class="transport">
+            <button id="shuffle" type="button" class="round r44" aria-pressed="false" aria-label="Shuffle" title="Shuffle"><span class="ic" data-icon="shuffle"></span></button>
             <button id="prev" type="button" class="round r56" aria-label="Previous" title="Previous"><span class="ic" data-icon="previous"></span></button>
             <button id="play" type="button" class="round r72 accent" aria-label="Play" title="Play"><span class="ic" data-icon="play"></span></button>
             <button id="next" type="button" class="round r56" aria-label="Next" title="Next"><span class="ic" data-icon="next"></span></button>
+            <button id="repeat" type="button" class="round r44" aria-pressed="false" aria-label="Repeat off" title="Repeat off"><span class="ic" data-icon="repeat"></span></button>
           </div>
         </div>
       </div>
@@ -72,7 +75,7 @@
     <div id="library-bar" class="searchbar">
       <div class="search-field">
         <span class="ic lead" data-icon="search"></span>
-        <input id="search" type="search" placeholder="Search albums and songs" aria-label="Search" autocomplete="off">
+        <input id="search" type="search" placeholder="Search artists, albums and songs" aria-label="Search" autocomplete="off">
         <button id="search-clear" type="button" class="round r44 plain" aria-label="Clear search" title="Clear search" hidden><span class="ic" data-icon="close"></span></button>
       </div>
       <button id="mix-open" type="button" class="btn raised mix-btn" aria-label="Random mix" title="Random mix"><span class="ic" data-icon="shuffle"></span><span class="lbl">Random mix</span></button>
@@ -84,15 +87,24 @@
         <div class="thumb album-cover"><img id="album-cover" alt="" hidden><span class="ic" data-icon="music"></span></div>
         <div class="album-text">
           <h2 id="album-name" class="album-name"></h2>
-          <p id="album-artist" class="sub"></p>
+          <div id="album-artist" class="line"></div>
           <p id="album-info" class="sub"></p>
         </div>
       </div>
       <div class="album-actions">
         <button id="album-play" type="button" class="btn accent"><span class="ic" data-icon="play"></span>Play</button>
+        <button id="album-next" type="button" class="btn raised"><span class="ic" data-icon="play-next"></span>Play next</button>
         <button id="album-add" type="button" class="btn raised"><span class="ic" data-icon="plus"></span>Add to queue</button>
       </div>
       <ul id="album-tracks" class="list tracks"></ul>
+    </div>
+    <div id="artist-view" class="album-view scroll" hidden>
+      <button id="artist-back" type="button" class="round r44 plain back" aria-label="Back" title="Back"><span class="ic" data-icon="back"></span></button>
+      <div class="artist-head">
+        <h2 id="artist-name" class="album-name"></h2>
+        <p id="artist-info" class="sub"></p>
+      </div>
+      <div id="artist-albums"></div>
     </div>
   </section>
 
@@ -163,8 +175,25 @@
   </div>
 </div>
 
+<div id="pl-sheet" class="sheet-root" hidden>
+  <div id="pl-dim" class="sheet-dim"></div>
+  <div id="pl-panel" class="sheet pl" role="dialog" aria-modal="true" aria-labelledby="pl-title" tabindex="-1">
+    <div class="sheet-head">
+      <h2 id="pl-title">Add to playlist</h2>
+      <button id="pl-close" type="button" class="round r44 plain" aria-label="Close" title="Close"><span class="ic" data-icon="close"></span></button>
+    </div>
+    <p id="pl-song" class="sub"></p>
+    <ul id="pl-list" class="pl-list"></ul>
+    <form id="pl-new" class="pl-new">
+      <input id="pl-name" type="text" placeholder="New playlist" aria-label="New playlist name" maxlength="120" autocomplete="off" enterkeyhint="done">
+      <button id="pl-create" type="submit" class="btn accent">Create</button>
+    </form>
+  </div>
+</div>
+
 <template id="tpl-queue-row">
   <li class="row">
+    <button type="button" class="round r44 plain grip" aria-label="Drag to reorder" title="Drag to reorder"><span class="ic" data-icon="drag"></span></button>
     <button type="button" class="main">
       <span class="thumb"><img alt="" loading="lazy" hidden><span class="ic" data-icon="music"></span></span>
       <span class="text"><span class="name"></span><span class="sub"></span></span>
@@ -187,6 +216,7 @@
   <li class="row">
     <span class="text"><span class="name"></span><span class="sub"></span></span>
     <button type="button" class="round r44 plain act-play" aria-label="Play" title="Play"><span class="ic" data-icon="play"></span></button>
+    <button type="button" class="round r44 plain act-next" aria-label="Play next" title="Play next"><span class="ic" data-icon="play-next"></span></button>
     <button type="button" class="round r44 plain act-add" aria-label="Add to queue" title="Add to queue"><span class="ic" data-icon="plus"></span></button>
   </li>
 </template>
@@ -197,6 +227,15 @@
       <span class="num"></span>
       <span class="text"><span class="name"></span><span class="sub"></span></span>
       <span class="dur"></span>
+    </button>
+  </li>
+</template>
+
+<template id="tpl-artist-row">
+  <li class="row">
+    <button type="button" class="main">
+      <span class="thumb artist-thumb"><img alt="" loading="lazy" hidden><span class="ic" data-icon="artist"></span></span>
+      <span class="text"><span class="name"></span><span class="sub"></span></span>
     </button>
   </li>
 </template>
@@ -215,6 +254,12 @@
 <template id="icon-back"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M14.6 4.6L16 6l-6 6 6 6-1.4 1.4L7.2 12z"/></svg></template>
 <template id="icon-settings"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path fill-rule="evenodd" d="M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 1 0 0-13zm0 3.5a3 3 0 1 1 0 6 3 3 0 1 1 0-6z"/><rect x="10.5" y="2" width="3" height="4"/><rect x="10.5" y="18" width="3" height="4"/><rect x="2" y="10.5" width="4" height="3"/><rect x="18" y="10.5" width="4" height="3"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(45 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(135 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(225 12 12)"/><rect x="10.5" y="2" width="3" height="4" transform="rotate(315 12 12)"/></svg></template>
 <template id="icon-shuffle"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M10.6 9.2L5.4 4 4 5.4l5.2 5.2zM14.5 4l2 2L4 18.6 5.4 20 18 7.5l2 2V4zm.3 9.4l-1.4 1.4 3.1 3.1-2 2H20v-5.5l-2 2z"/></svg></template>
+<template id="icon-play-next"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 6h18v2H3zM3 11h8v2H3zM3 16h8v2H3zM14 11v8l7-4z"/></svg></template>
+<template id="icon-drag"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M5 7h14v2H5zM5 11h14v2H5zM5 15h14v2H5z"/></svg></template>
+<template id="icon-playlist-add"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M3 6h13v2H3zM3 11h13v2H3zM3 16h7v2H3zM17 14h2v3h3v2h-3v3h-2v-3h-3v-2h3z"/></svg></template>
+<template id="icon-repeat"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M7 7h10V4l4 4-4 4V9H5v4H3V9a2 2 0 0 1 2-2zM17 17H7v3l-4-4 4-4v3h12v-4h2v4a2 2 0 0 1-2 2z"/></svg></template>
+<template id="icon-repeat-one"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M7 7h10V4l4 4-4 4V9H5v4H3V9a2 2 0 0 1 2-2zM17 17H7v3l-4-4 4-4v3h12v-4h2v4a2 2 0 0 1-2 2zM13.4 9.5v5H12v-3.3l-1.5 1v-1.4l1.5-1.3z"/></svg></template>
+<template id="icon-artist"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zM4 20a8 8 0 0 1 16 0z"/></svg></template>
 <template id="icon-music"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M9 4v10.3a3.5 3.5 0 1 0 2 3.2V8h6V4z"/></svg></template>
 
 <script type="module" src="remote.js"></script>

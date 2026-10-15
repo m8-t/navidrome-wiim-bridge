@@ -3,6 +3,8 @@ import {
   estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
+  playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep, sortAlbumsByYear,
+  countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
 } from "./logic.js";
 
 const STORAGE_KEY = "wiimRemoteAuth";
@@ -25,6 +27,7 @@ const FLOW_VELOCITY_MS = 100;
 const FLOW_CENTRE_SIZE = 600;
 const FLOW_SIDE_SIZE = 300;
 const PAGE_SIZE = 40;
+const RECENT_SIZE = 20;
 
 const $ = (id) => document.getElementById(id);
 const icon = (name) => $(`icon-${name}`).content.cloneNode(true);
@@ -34,6 +37,7 @@ const setIcon = (button, name) => {
     wrap = el("span", "ic");
     button.replaceChildren(wrap);
   }
+  if (wrap.dataset.icon === name && wrap.firstChild) return;
   wrap.dataset.icon = name;
   wrap.replaceChildren(icon(name));
 };
@@ -55,7 +59,7 @@ const el = (tag, className, text) => {
 };
 
 let auth = null;
-let status = { currentIndex: 0, playing: false, gain: 0, position: 0, muted: false };
+let status = { currentIndex: 0, playing: false, gain: 0, position: 0, muted: false, shuffle: false, repeat: "off" };
 let entries = [];
 let polledAt = Date.now();
 let anchorGeneration = 0;
@@ -77,7 +81,6 @@ let mixGenres = null;
 let mixBusy = false;
 let searchTimer = null;
 let searchToken = 0;
-let albumSongs = [];
 let currentTab = "player";
 let lockActive = false;
 let silentAudio = null;
@@ -89,7 +92,15 @@ let lastPollAt = 0;
 let sheetReturnFocus = null;
 let flow = { el: null, tiles: [], position: null, spacing: 0, anim: null };
 let paging = { offset: 0, done: false, loading: false, observer: null, sentinel: null, grid: null };
-let libraryScroll = 0;
+const views = createViewStack();
+let navToken = 0;
+let playlists = null;
+let home = { recentBox: null, playlistBox: null };
+let qdrag = null;
+let plSong = null;
+let plBusy = false;
+
+const VIEW_NODES = { album: "album-view", playlist: "album-view", artist: "artist-view" };
 
 function showStatus(message, info = false) {
   const node = $("status");
@@ -127,6 +138,10 @@ function signOut(message = "") {
   knownQueueVersion = null;
   queueKey = null;
   mixGenres = null;
+  playlists = null;
+  plSong = null;
+  if (qdrag) finishRowDrag();
+  views.reset();
   generation += 1;
   showLogin(message);
 }
@@ -199,6 +214,8 @@ function applyStatus(next, list) {
     gain: Number(next.gain) || 0,
     position,
     muted: Boolean(next.muted),
+    shuffle: Boolean(next.shuffle),
+    repeat: normalizeRepeat(next.repeat),
   };
   polledAt = Date.now();
   if (list) {
@@ -219,9 +236,13 @@ function setFill(input) {
   input.style.setProperty("--fill", `${pct}%`);
 }
 
-function setThumb(img, coverArt, size) {
+function setThumb(img, coverArt, size, fallbackUrl) {
   if (coverArt) {
     img.src = coverUrl(coverArt, size);
+    img.hidden = false;
+  } else if (fallbackUrl) {
+    img.referrerPolicy = "no-referrer";
+    img.src = fallbackUrl;
     img.hidden = false;
   } else {
     img.hidden = true;
@@ -254,9 +275,27 @@ function showBackdrop(song) {
   }
 }
 
+// Rebuilt only when the text changes, so a poll cannot swap the button out from under a tap.
+function setLinkLine(node, text, artistId) {
+  const key = `${artistId || ""}|${text}`;
+  if (node.dataset.key === key) return;
+  node.dataset.key = key;
+  const label = el("span", "link-text", text);
+  if (!artistId || !text) {
+    delete node.dataset.artistId;
+    node.replaceChildren(label);
+    return;
+  }
+  const button = el("button", "link");
+  button.type = "button";
+  button.append(label);
+  node.dataset.artistId = artistId;
+  node.replaceChildren(button);
+}
+
 function renderMeta(song) {
   $("title").textContent = song ? song.title || "" : "";
-  $("artist").textContent = song ? song.artist || "" : "";
+  setLinkLine($("artist"), song ? song.artist || "" : "", song && song.artistId);
   $("album").textContent = song ? song.album || "" : "";
 }
 
@@ -277,8 +316,14 @@ function render() {
   setPlayIcon($("mini-play"));
   $("play").disabled = !hasQueue;
   $("prev").disabled = !hasQueue;
-  $("next").disabled = nextTarget(status.currentIndex, entries.length) === null;
+  $("next").disabled = nextTarget(status.currentIndex, entries.length, status.repeat) === null;
   $("mini-next").disabled = $("next").disabled;
+  $("shuffle").setAttribute("aria-pressed", String(status.shuffle));
+  const repeat = $("repeat");
+  repeat.setAttribute("aria-pressed", String(status.repeat !== "off"));
+  setIcon(repeat, status.repeat === "one" ? "repeat-one" : "repeat");
+  repeat.setAttribute("aria-label", `Repeat ${status.repeat}`);
+  repeat.title = `Repeat ${status.repeat}`;
   const mute = $("mute");
   mute.setAttribute("aria-pressed", String(status.muted));
   setIcon(mute, status.muted ? "volume-muted" : "volume");
@@ -334,8 +379,13 @@ function paintTime() {
   $("mini-fill").style.setProperty("--p", String(fraction));
 }
 
+function queueIds() {
+  return entries.map((e) => e.id).join(",");
+}
+
 function renderQueue(force = false) {
-  const ids = entries.map((e) => e.id).join(",");
+  if (qdrag) return;
+  const ids = queueIds();
   if (!force && ids === queueKey) {
     if (status.currentIndex !== queueIndex) markCurrentRow();
     return;
@@ -343,7 +393,10 @@ function renderQueue(force = false) {
   queueKey = ids;
   queueIndex = status.currentIndex;
   const list = $("queue");
-  list.replaceChildren();
+  const scroll = list.scrollTop;
+  const wasEmpty = list.childElementCount === 0;
+  const indexOf = (row) => Array.prototype.indexOf.call(list.children, row);
+  const rows = document.createDocumentFragment();
   entries.forEach((song, i) => {
     const fragment = clone("tpl-queue-row");
     const row = fragment.firstElementChild;
@@ -354,22 +407,130 @@ function renderQueue(force = false) {
     setThumb(row.querySelector("img"), song.coverArt, 96);
     row.querySelector(".main").addEventListener("click", () => {
       gesture();
-      const calls = [{ action: "skip", index: i, offset: 0 }];
+      const calls = [{ action: "skip", index: indexOf(row), offset: 0 }];
       if (!status.playing) calls.push({ action: "start" });
       runCommands(calls);
     });
-    row.querySelector(".remove").addEventListener("click", () => runCommands([{ action: "remove", index: i }]));
-    list.append(fragment);
+    row.querySelector(".remove").addEventListener("click", () => runCommands([{ action: "remove", index: indexOf(row) }]));
+    rows.append(fragment);
   });
-  if (currentTab === "queue") scrollCurrentIntoView();
+  list.replaceChildren(rows);
+  list.scrollTop = scroll;
+  if (wasEmpty && currentTab === "queue") scrollCurrentIntoView();
 }
 
 function markCurrentRow() {
+  if (qdrag) return;
   const rows = $("queue").children;
   if (rows[queueIndex]) rows[queueIndex].classList.remove("current");
   queueIndex = status.currentIndex;
   if (rows[queueIndex]) rows[queueIndex].classList.add("current");
   if (currentTab === "queue") scrollCurrentIntoView();
+}
+
+function dragMetrics(drag) {
+  const list = $("queue");
+  const min = -drag.from * drag.rowHeight;
+  const max = (drag.rows.length - 1 - drag.from) * drag.rowHeight;
+  const raw = drag.y - drag.startY + (list.scrollTop - drag.startScroll);
+  const offset = Math.min(max, Math.max(min, raw));
+  return { offset, to: dragTargetIndex(drag.from, offset, drag.rowHeight, drag.rows.length) };
+}
+
+function paintRowDrag() {
+  const drag = qdrag;
+  const { offset, to } = dragMetrics(drag);
+  drag.row.style.transform = `translateY(${offset}px)`;
+  if (to === drag.to) return;
+  drag.to = to;
+  drag.rows.forEach((row, i) => {
+    if (row === drag.row) return;
+    const shift = dragShift(i, drag.from, to);
+    row.style.transform = shift ? `translateY(${shift * drag.rowHeight}px)` : "";
+  });
+}
+
+function dragFrame() {
+  const drag = qdrag;
+  if (!drag) return;
+  const list = $("queue");
+  const box = list.getBoundingClientRect();
+  const step = autoScrollStep(drag.y, box.top, box.bottom);
+  if (step) list.scrollTop += step;
+  paintRowDrag();
+  drag.frame = requestAnimationFrame(dragFrame);
+}
+
+function startRowDrag(event, row, grip) {
+  if (qdrag || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+  const list = $("queue");
+  const rows = [...list.children];
+  const from = rows.indexOf(row);
+  if (from < 0 || from === status.currentIndex) return;
+  event.preventDefault();
+  try {
+    grip.setPointerCapture(event.pointerId);
+  } catch {
+    // pointer already gone; the drag still works from the events on the list
+  }
+  qdrag = {
+    id: event.pointerId, row, rows, from, to: from, key: queueIds(),
+    rowHeight: row.getBoundingClientRect().height,
+    startY: event.clientY, y: event.clientY, startScroll: list.scrollTop, frame: 0,
+  };
+  row.classList.add("dragging");
+  list.classList.add("reordering");
+  qdrag.frame = requestAnimationFrame(dragFrame);
+}
+
+function moveRowDrag(event) {
+  if (qdrag && event.pointerId === qdrag.id) qdrag.y = event.clientY;
+}
+
+function finishRowDrag() {
+  const drag = qdrag;
+  qdrag = null;
+  cancelAnimationFrame(drag.frame);
+  $("queue").classList.remove("reordering");
+  drag.row.classList.remove("dragging");
+  for (const row of drag.rows) row.style.transform = "";
+  return drag;
+}
+
+function endRowDrag(event) {
+  if (!qdrag || event.pointerId !== qdrag.id) return;
+  qdrag.y = event.clientY;
+  const { to } = dragMetrics(qdrag);
+  const drag = finishRowDrag();
+  const intact = queueIds() === drag.key && drag.from !== status.currentIndex;
+  if (to !== drag.from && intact) commitMove(drag.row, drag.from, to);
+  else renderQueue();
+}
+
+function cancelRowDrag(event) {
+  if (!qdrag || event.pointerId !== qdrag.id) return;
+  finishRowDrag();
+  renderQueue();
+}
+
+function commitMove(row, from, to) {
+  const list = $("queue");
+  const scroll = list.scrollTop;
+  entries = moveEntry(entries, from, to);
+  status = { ...status, currentIndex: indexAfterMove(status.currentIndex, from, to) };
+  queueKey = queueIds();
+  queueIndex = status.currentIndex;
+  const others = [...list.children].filter((other) => other !== row);
+  list.insertBefore(row, others[to] || null);
+  list.scrollTop = scroll;
+  const stale = list.querySelector(".row.current");
+  const live = list.children[status.currentIndex];
+  if (stale !== live) {
+    if (stale) stale.classList.remove("current");
+    if (live) live.classList.add("current");
+  }
+  render();
+  runCommands([{ action: "move", index: from, toIndex: to }]);
 }
 
 function scrollCurrentIntoView() {
@@ -465,7 +626,10 @@ function setTab(name) {
   }
   updateChrome();
   if (name === "queue") scrollCurrentIntoView();
-  if (name === "library" && !$("library-list").childElementCount) loadLibrary();
+  if (name === "library") {
+    if (!$("library-list").childElementCount) loadLibrary();
+    else refreshRecent();
+  }
 }
 
 function togglePlay() {
@@ -479,7 +643,7 @@ function goPrevious() {
 }
 
 function goNext() {
-  const index = nextTarget(status.currentIndex, entries.length);
+  const index = nextTarget(status.currentIndex, entries.length, status.repeat);
   if (index !== null) runCommands([{ action: "skip", index, offset: 0 }]);
 }
 
@@ -709,6 +873,22 @@ function bindPlayer() {
   $("mute").addEventListener("click", () => {
     runCommands([{ action: "setMute", mute: String(!status.muted) }]);
   });
+  $("shuffle").addEventListener("click", () => {
+    const shuffle = !status.shuffle;
+    status = { ...status, shuffle };
+    render();
+    runCommands([{ action: "setShuffle", shuffle: String(shuffle) }]);
+  });
+  $("repeat").addEventListener("click", () => {
+    const repeat = nextRepeat(status.repeat);
+    status = { ...status, repeat };
+    render();
+    runCommands([{ action: "setRepeat", repeat }]);
+  });
+  $("playlist-add").addEventListener("click", openPlaylistSheet);
+  $("artist").addEventListener("click", (event) => {
+    if (event.target.closest("button.link")) openArtist($("artist").dataset.artistId, { fromPlayer: true });
+  });
   const seek = $("seek");
   seek.addEventListener("input", () => {
     dragging = true;
@@ -735,6 +915,18 @@ function bindQueue() {
   $("clear").addEventListener("click", () => {
     if (window.confirm("Clear the whole queue?")) runCommands([{ action: "clear" }]);
   });
+  const list = $("queue");
+  list.addEventListener("pointerdown", (event) => {
+    const grip = event.target.closest(".grip");
+    if (grip) startRowDrag(event, grip.closest(".row"), grip);
+  });
+  list.addEventListener("pointermove", moveRowDrag);
+  list.addEventListener("pointerup", endRowDrag);
+  list.addEventListener("pointercancel", cancelRowDrag);
+  list.addEventListener("lostpointercapture", cancelRowDrag);
+  list.addEventListener("contextmenu", (event) => {
+    if (event.target.closest(".grip")) event.preventDefault();
+  });
 }
 
 async function playAndShow(calls) {
@@ -746,20 +938,36 @@ async function addAndReport(calls) {
   if (await runCommands(calls)) showStatus("Added", true);
 }
 
-function albumCard(album) {
+async function playNextAndReport(ids) {
+  if (await runCommands(playNextCalls(ids, entries.length))) showStatus("Playing next", true);
+}
+
+const soft = (promise) => promise.catch(() => []);
+
+function albumCard(album, sub = album.artist || "") {
   const fragment = clone("tpl-album-card");
   const card = fragment.firstElementChild;
   setThumb(card.querySelector("img"), album.coverArt, 300);
   card.querySelector(".card-name").textContent = album.name || album.title || "";
-  card.querySelector(".sub").textContent = album.artist || "";
+  card.querySelector(".sub").textContent = sub;
   card.addEventListener("click", () => openAlbum(album));
   return card;
 }
 
-function albumGrid(albums) {
+function albumGrid(albums, subOf) {
   const grid = el("div", "grid");
-  for (const album of albums) grid.append(albumCard(album));
+  for (const album of albums) grid.append(albumCard(album, subOf ? subOf(album) : undefined));
   return grid;
+}
+
+function playlistCard(playlist) {
+  const fragment = clone("tpl-album-card");
+  const card = fragment.firstElementChild;
+  setThumb(card.querySelector("img"), playlist.coverArt, 300);
+  card.querySelector(".card-name").textContent = playlist.name || "";
+  card.querySelector(".sub").textContent = countLabel(playlist.songCount, "song");
+  card.addEventListener("click", () => openPlaylist(playlist));
+  return card;
 }
 
 function songRow(song) {
@@ -768,10 +976,24 @@ function songRow(song) {
   row.querySelector(".name").textContent = song.title || "";
   row.querySelector(".sub").textContent = song.artist || "";
   row.querySelector(".act-play").addEventListener("click", () => playAndShow(playCalls([song.id], 0)));
+  row.querySelector(".act-next").addEventListener("click", () => {
+    gesture();
+    playNextAndReport([song.id]);
+  });
   row.querySelector(".act-add").addEventListener("click", () => {
     gesture();
     addAndReport(addCalls([song.id]));
   });
+  return row;
+}
+
+function artistRow(artist) {
+  const fragment = clone("tpl-artist-row");
+  const row = fragment.firstElementChild;
+  row.querySelector(".name").textContent = artist.name || "";
+  row.querySelector(".sub").textContent = artist.albumCount != null ? countLabel(artist.albumCount, "album") : "";
+  setThumb(row.querySelector("img"), artist.coverArt, 96, artist.artistImageUrl);
+  row.querySelector(".main").addEventListener("click", () => openArtist(artist.id));
   return row;
 }
 
@@ -783,6 +1005,19 @@ function resetPaging() {
 async function fetchAlbumPage(offset) {
   const body = await api("getAlbumList2", { type: "newest", size: PAGE_SIZE, offset });
   return (body.albumList2 && body.albumList2.album) || [];
+}
+
+async function fetchRecentAlbums() {
+  const body = await api("getAlbumList2", { type: "recent", size: RECENT_SIZE });
+  return (body.albumList2 && body.albumList2.album) || [];
+}
+
+async function fetchPlaylists() {
+  if (!playlists) {
+    const body = await api("getPlaylists");
+    playlists = (body.playlists && body.playlists.playlist) || [];
+  }
+  return playlists;
 }
 
 function stopPaging(state) {
@@ -828,28 +1063,79 @@ async function loadMore() {
   }
 }
 
+function homeBox(title) {
+  const box = el("section", "home-box");
+  box.dataset.title = title;
+  box.hidden = true;
+  return box;
+}
+
+function fillShelf(box, cards, key) {
+  if (!box || box.dataset.key === key) return;
+  box.dataset.key = key;
+  box.hidden = cards.length === 0;
+  const row = el("div", "shelf");
+  row.append(...cards);
+  box.replaceChildren(el("h2", "section", box.dataset.title), row);
+}
+
+const fillRecent = (albums) => fillShelf(home.recentBox, albums.map((a) => albumCard(a)), albums.map((a) => a.id).join(","));
+const fillPlaylists = (lists) => fillShelf(
+  home.playlistBox,
+  lists.map(playlistCard),
+  lists.map((p) => `${p.id}|${p.name}|${p.songCount}|${p.changed || ""}|${p.coverArt || ""}`).join(","),
+);
+
+function refreshRecent() {
+  if (!home.recentBox || !home.recentBox.isConnected) return;
+  const token = searchToken;
+  fetchRecentAlbums().then((albums) => { if (token === searchToken) fillRecent(albums); }, () => {});
+}
+
+function invalidatePlaylists() {
+  playlists = null;
+  if (!home.playlistBox || !home.playlistBox.isConnected) return;
+  fetchPlaylists().then(fillPlaylists, () => {});
+}
+
 async function loadRecent(token, list) {
-  const albums = await fetchAlbumPage(0);
+  let failure = null;
+  const [albums, recent, lists] = await Promise.all([
+    fetchAlbumPage(0).catch((err) => { failure = err; return []; }),
+    soft(fetchRecentAlbums()),
+    soft(fetchPlaylists()),
+  ]);
   if (token !== searchToken) return;
-  if (!albums.length) {
-    list.replaceChildren(el("p", "nothing", "Nothing found"));
-    return;
+  home = { recentBox: homeBox("Recently played"), playlistBox: homeBox("Playlists") };
+  fillRecent(recent);
+  fillPlaylists(lists);
+  const nodes = [home.recentBox, home.playlistBox];
+  const grid = albums.length ? albumGrid(albums) : null;
+  if (grid) nodes.push(el("h2", "section", "Recently added"), grid);
+  else if (!failure && !recent.length && !lists.length) nodes.push(el("p", "nothing", "Nothing found"));
+  list.replaceChildren(...nodes);
+  if (grid) {
+    paging.grid = grid;
+    watchSentinel(paging);
+    advancePaging(paging, albums.length);
   }
-  const grid = albumGrid(albums);
-  list.replaceChildren(el("h2", "section", "Recently added"), grid);
-  paging.grid = grid;
-  watchSentinel(paging);
-  advancePaging(paging, albums.length);
+  if (failure) handleError(failure);
 }
 
 async function loadSearch(token, list, query) {
   const body = await api("search3", {
-    query, albumCount: 20, songCount: 20, artistCount: 0,
+    query, albumCount: 20, songCount: 20, artistCount: 10,
   });
   const result = body.searchResult3 || {};
+  const artists = result.artist || [];
   const albums = result.album || [];
   const songs = result.song || [];
   const nodes = [];
+  if (artists.length) {
+    const ul = el("ul", "list songs");
+    for (const artist of artists) ul.append(artistRow(artist));
+    nodes.push(el("h2", "section", "Artists"), ul);
+  }
   if (albums.length) nodes.push(el("h2", "section", "Albums"), albumGrid(albums));
   if (songs.length) {
     const ul = el("ul", "list songs");
@@ -873,46 +1159,138 @@ async function loadLibrary() {
   }
 }
 
+function renderTracks(songs, { numbered, albumArtist }) {
+  const tracks = $("album-tracks");
+  tracks.replaceChildren();
+  const ids = songs.map((s) => s.id);
+  songs.forEach((song, i) => {
+    const fragment = clone("tpl-track-row");
+    const row = fragment.firstElementChild;
+    const num = row.querySelector(".num");
+    if (numbered) num.textContent = String(song.track || i + 1);
+    else num.remove();
+    row.querySelector(".name").textContent = song.title || "";
+    row.querySelector(".sub").textContent = numbered ? trackArtistIfDifferent(song, albumArtist) : song.artist || "";
+    row.querySelector(".dur").textContent = formatTime(song.duration);
+    row.querySelector(".main").addEventListener("click", () => playAndShow(playCalls(ids, i)));
+    tracks.append(fragment);
+  });
+}
+
+function paintAlbumView(frame) {
+  const isAlbum = frame.kind === "album";
+  $("album-name").textContent = frame.name;
+  $("album-artist").hidden = !isAlbum;
+  setLinkLine($("album-artist"), isAlbum ? frame.artist : "", isAlbum && frame.artistId);
+  $("album-info").textContent = isAlbum ? queueSummary(frame.songs) : playlistInfo(frame.owner, frame.songs);
+  setThumb($("album-cover"), frame.coverArt, 240);
+  renderTracks(frame.songs, { numbered: isAlbum, albumArtist: frame.artist });
+  for (const id of ["album-play", "album-next", "album-add"]) $(id).disabled = frame.songs.length === 0;
+}
+
+function paintArtistView(frame) {
+  $("artist-name").textContent = frame.name;
+  $("artist-info").textContent = countLabel(frame.count, "album");
+  $("artist-albums").replaceChildren(
+    frame.albums.length
+      ? albumGrid(frame.albums, (album) => (album.year ? String(album.year) : ""))
+      : el("p", "nothing", "No albums"),
+  );
+}
+
+const PAINT = { album: paintAlbumView, playlist: paintAlbumView, artist: paintArtistView };
+
+// Every view is repainted from the data its frame holds, so the same artist or album can sit on the stack twice.
+function paintViews() {
+  const frame = views.top();
+  $("library-list").hidden = Boolean(frame);
+  $("library-bar").hidden = Boolean(frame);
+  for (const id of new Set(Object.values(VIEW_NODES))) $(id).hidden = !frame || VIEW_NODES[frame.kind] !== id;
+  if (!frame) {
+    $("library-list").scrollTop = views.rootScroll();
+    return;
+  }
+  PAINT[frame.kind](frame);
+  $(VIEW_NODES[frame.kind]).scrollTop = frame.scroll;
+}
+
+function pushView(frame) {
+  const top = views.top();
+  views.push(frame, top ? $(VIEW_NODES[top.kind]).scrollTop : $("library-list").scrollTop);
+  paintViews();
+}
+
+function popView() {
+  views.pop();
+  paintViews();
+}
+
+function closeAllViews() {
+  if (!views.depth()) return;
+  views.clear();
+  paintViews();
+}
+
 async function openAlbum(album) {
+  const token = ++navToken;
   try {
     const body = await api("getAlbum", { id: album.id });
+    if (token !== navToken) return;
     const data = body.album || {};
-    albumSongs = [...(data.song || [])].sort(
+    const songs = [...(data.song || [])].sort(
       (a, b) => (a.discNumber || 0) - (b.discNumber || 0) || (a.track || 0) - (b.track || 0),
     );
-    const albumArtist = data.artist || album.artist || "";
-    $("album-name").textContent = data.name || album.name || "";
-    $("album-artist").textContent = albumArtist;
-    $("album-info").textContent = queueSummary(albumSongs);
-    setThumb($("album-cover"), data.coverArt || album.coverArt, 240);
-    const tracks = $("album-tracks");
-    tracks.replaceChildren();
-    const allIds = albumSongs.map((s) => s.id);
-    albumSongs.forEach((song, i) => {
-      const fragment = clone("tpl-track-row");
-      const row = fragment.firstElementChild;
-      row.querySelector(".num").textContent = String(song.track || i + 1);
-      row.querySelector(".name").textContent = song.title || "";
-      row.querySelector(".sub").textContent = trackArtistIfDifferent(song, albumArtist);
-      row.querySelector(".dur").textContent = formatTime(song.duration);
-      row.querySelector(".main").addEventListener("click", () => playAndShow(playCalls(allIds, i)));
-      tracks.append(fragment);
+    pushView({
+      kind: "album",
+      name: data.name || album.name || "",
+      artist: data.artist || album.artist || "",
+      artistId: data.artistId || album.artistId || null,
+      coverArt: data.coverArt || album.coverArt,
+      songs,
     });
-    libraryScroll = $("library-list").scrollTop;
-    $("album-view").hidden = false;
-    $("library-list").hidden = true;
-    $("library-bar").hidden = true;
-    $("album-view").scrollTop = 0;
   } catch (err) {
-    handleError(err);
+    if (token === navToken) handleError(err);
   }
 }
 
-function closeAlbum() {
-  $("album-view").hidden = true;
-  $("library-list").hidden = false;
-  $("library-bar").hidden = false;
-  $("library-list").scrollTop = libraryScroll;
+async function openPlaylist(playlist) {
+  const token = ++navToken;
+  try {
+    const body = await api("getPlaylist", { id: playlist.id });
+    if (token !== navToken) return;
+    const data = body.playlist || {};
+    pushView({
+      kind: "playlist",
+      id: playlist.id,
+      name: data.name || playlist.name || "",
+      owner: data.owner || playlist.owner || "",
+      coverArt: data.coverArt || playlist.coverArt,
+      songs: Array.isArray(data.entry) ? data.entry : [],
+    });
+  } catch (err) {
+    if (token === navToken) handleError(err);
+  }
+}
+
+async function openArtist(id, { fromPlayer = false } = {}) {
+  if (!id) return;
+  const token = ++navToken;
+  try {
+    const body = await api("getArtist", { id });
+    if (token !== navToken) return;
+    const data = body.artist || {};
+    const albums = sortAlbumsByYear(data.album || []);
+    const frame = {
+      kind: "artist", id, name: data.name || "", count: Number(data.albumCount) || albums.length, albums,
+    };
+    if (fromPlayer) {
+      setTab("library");
+      closeAllViews();
+    }
+    pushView(frame);
+  } catch (err) {
+    if (token === navToken) handleError(err);
+  }
 }
 
 function bindLibrary() {
@@ -928,10 +1306,18 @@ function bindLibrary() {
     loadLibrary();
     $("search").focus();
   });
-  $("album-back").addEventListener("click", closeAlbum);
-  const ids = () => albumSongs.map((s) => s.id);
+  $("album-back").addEventListener("click", popView);
+  $("artist-back").addEventListener("click", popView);
+  const ids = () => ((views.top() || {}).songs || []).map((s) => s.id);
   $("album-play").addEventListener("click", () => playAndShow(playCalls(ids(), 0)));
+  $("album-next").addEventListener("click", () => {
+    gesture();
+    playNextAndReport(ids());
+  });
   $("album-add").addEventListener("click", () => addAndReport(addCalls(ids())));
+  $("album-artist").addEventListener("click", (event) => {
+    if (event.target.closest("button.link")) openArtist($("album-artist").dataset.artistId);
+  });
 }
 
 const mediaSupported = () => "mediaSession" in navigator;
@@ -1224,6 +1610,87 @@ function bindMix() {
   });
 }
 
+function setPlaylistBusy(busy) {
+  plBusy = busy;
+  for (const button of $("pl-panel").querySelectorAll(".pl-item, #pl-create")) button.disabled = busy;
+}
+
+async function renderPlaylistChoices(song) {
+  const box = $("pl-list");
+  try {
+    const own = ownPlaylists(await fetchPlaylists(), auth && auth.u);
+    if ($("pl-sheet").hidden || plSong !== song) return;
+    if (!own.length) {
+      box.replaceChildren(el("li", "pl-empty", "No playlists yet"));
+      return;
+    }
+    box.replaceChildren(...own.map((playlist) => {
+      const item = el("li");
+      const button = el("button", "pl-item");
+      button.type = "button";
+      button.append(el("span", "name", playlist.name || ""), el("span", "sub", countLabel(playlist.songCount, "song")));
+      button.addEventListener("click", () => saveToPlaylist(
+        "updatePlaylist", { playlistId: playlist.id, songIdToAdd: song.id }, playlist.name || "playlist",
+      ));
+      item.append(button);
+      return item;
+    }));
+  } catch (err) {
+    handleError(err);
+  }
+}
+
+function openPlaylistSheet() {
+  const song = currentSong();
+  if (!song) return;
+  plSong = song;
+  $("pl-song").textContent = [song.title, song.artist].filter(Boolean).join(" \u00b7 ");
+  $("pl-name").value = "";
+  $("pl-list").replaceChildren(el("li", "pl-empty", "Loading\u2026"));
+  setPlaylistBusy(false);
+  showSheet($("pl-sheet"));
+  renderPlaylistChoices(song);
+}
+
+function patchPlaylistViews(playlistId, song) {
+  for (const frame of views.all()) {
+    if (frame.kind === "playlist" && frame.id === playlistId) frame.songs = [...frame.songs, song];
+  }
+  const top = views.top();
+  if (top && top.kind === "playlist" && top.id === playlistId) paintAlbumView(top);
+}
+
+async function saveToPlaylist(method, params, name) {
+  const song = plSong;
+  if (plBusy || !song) return;
+  setPlaylistBusy(true);
+  try {
+    await api(method, params);
+    if (params.playlistId) patchPlaylistViews(params.playlistId, song);
+    showStatus(`Added to ${name}`, true);
+    closeSheet();
+    invalidatePlaylists();
+  } catch (err) {
+    handleError(err);
+  } finally {
+    setPlaylistBusy(false);
+  }
+}
+
+function bindPlaylistSheet() {
+  $("pl-close").addEventListener("click", () => closeSheet());
+  $("pl-dim").addEventListener("click", () => closeSheet());
+  $("pl-new").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = $("pl-name").value.trim();
+    if (!name) {
+      $("pl-name").focus();
+      return;
+    }
+    saveToPlaylist("createPlaylist", { name, songId: plSong && plSong.id }, name);
+  });
+}
+
 function bindSheet() {
   $("open-settings").addEventListener("click", openSettings);
   $("sheet-close").addEventListener("click", () => closeSheet());
@@ -1290,11 +1757,13 @@ function bindLogin() {
 function enterApp() {
   showApp();
   setTab("player");
-  closeAlbum();
+  views.reset();
+  paintViews();
   $("library-list").replaceChildren();
   searchToken += 1;
   resetPaging();
-  libraryScroll = 0;
+  playlists = null;
+  home = { recentBox: null, playlistBox: null };
   if (lockPreferred() && mediaSupported()) startLockSession(false);
   poll();
 }
@@ -1320,6 +1789,7 @@ function init() {
   bindLibrary();
   bindSheet();
   bindMix();
+  bindPlaylistSheet();
   startLoops();
   auth = loadStoredAuth();
   if (auth) enterApp();

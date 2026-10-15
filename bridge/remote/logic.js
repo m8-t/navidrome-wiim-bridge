@@ -22,8 +22,20 @@ export function previousTarget(index, positionSeconds) {
   return { index: index - 1, offset: 0 };
 }
 
-export function nextTarget(index, length) {
-  return index + 1 >= length ? null : index + 1;
+export function nextTarget(index, length, repeat) {
+  if (!(length > 0)) return null;
+  if (index + 1 >= length) return repeat === "all" ? 0 : null;
+  return index + 1;
+}
+
+const REPEAT_MODES = ["off", "all", "one"];
+
+export function normalizeRepeat(value) {
+  return REPEAT_MODES.includes(value) ? value : "off";
+}
+
+export function nextRepeat(mode) {
+  return REPEAT_MODES[(REPEAT_MODES.indexOf(normalizeRepeat(mode)) + 1) % REPEAT_MODES.length];
 }
 
 const FLOW_RUBBER = 0.3;
@@ -111,6 +123,16 @@ export function mixCalls(ids) {
 
 export function addCalls(ids) {
   return chunk(ids).map((part) => ({ action: "add", ids: part }));
+}
+
+// Every insert lands right after the current track, so the chunks go in reverse to end up in input order.
+export function insertCalls(ids) {
+  return chunk(ids).reverse().map((part) => ({ action: "insert", ids: part }));
+}
+
+// On an empty queue the server treats insert as add, and later chunks would land inside the first one.
+export function playNextCalls(ids, queueLength) {
+  return queueLength > 0 ? insertCalls(ids) : addCalls(ids);
 }
 
 export function estimatePosition(position, playing, polledAtMs, nowMs, duration) {
@@ -289,13 +311,13 @@ export async function collectMix(fetchRound, count, skipInterludes, rng = Math.r
   return { songs: mergeRandom([kept], count, rng), short: kept.length < count };
 }
 
-const REFRESHING_ACTIONS = new Set(["set", "add", "remove", "clear"]);
+const REFRESHING_ACTIONS = new Set(["set", "add", "insert", "move", "setShuffle", "remove", "clear"]);
 
 export function needsRefresh(calls) {
   return calls.some((call) => REFRESHING_ACTIONS.has(call.action));
 }
 
-const BARRIER_ACTIONS = new Set(["set", "remove", "clear"]);
+const BARRIER_ACTIONS = new Set(["set", "remove", "clear", "setShuffle"]);
 
 export function isAddOnly(calls) {
   return calls.length > 0 && calls.every((call) => call.action === "add");
@@ -311,8 +333,8 @@ export function needsEntries(statusBody, knownVersion) {
 }
 
 // Add-only batches run on a background lane so playback controls are not stuck behind
-// them; set/remove/clear batches are barriers that wait for the add lane to drain and
-// hold back adds queued after them.
+// them; set/remove/clear/setShuffle batches are barriers that wait for the add lane to drain
+// and hold back adds queued after them.
 export function createLanes() {
   const settled = (promise) => promise.then(() => {}, () => {});
   let main = Promise.resolve();
@@ -336,6 +358,101 @@ export function createLanes() {
       return result.finally(() => {
         pendingMain -= 1;
       });
+    },
+  };
+}
+
+export function moveEntry(list, from, to) {
+  const out = list.slice();
+  const inside = (i) => Number.isInteger(i) && i >= 0 && i < out.length;
+  if (inside(from) && inside(to)) out.splice(to, 0, ...out.splice(from, 1));
+  return out;
+}
+
+export function indexAfterMove(current, from, to) {
+  if (from === current) return to;
+  if (from < current && to >= current) return current - 1;
+  if (from > current && to <= current) return current + 1;
+  return current;
+}
+
+export function dragTargetIndex(from, offsetY, rowHeight, length) {
+  if (!(rowHeight > 0) || !(length > 0) || !Number.isFinite(offsetY)) return from;
+  return Math.min(Math.max(from + Math.round(offsetY / rowHeight), 0), length - 1);
+}
+
+// Rows between the grabbed one and the drop slot make room by one row height.
+export function dragShift(index, from, to) {
+  if (from < to && index > from && index <= to) return -1;
+  if (from > to && index >= to && index < from) return 1;
+  return 0;
+}
+
+export const DRAG_EDGE_PX = 60;
+export const DRAG_SCROLL_MAX = 18;
+
+export function autoScrollStep(pointerY, top, bottom, edge = DRAG_EDGE_PX, maxStep = DRAG_SCROLL_MAX) {
+  if (!Number.isFinite(pointerY) || !(bottom > top)) return 0;
+  const zone = Math.min(edge, (bottom - top) / 2);
+  if (pointerY < top + zone) return -Math.round(maxStep * Math.min(1, (top + zone - pointerY) / zone)) || 0;
+  if (pointerY > bottom - zone) return Math.round(maxStep * Math.min(1, (pointerY - (bottom - zone)) / zone)) || 0;
+  return 0;
+}
+
+export function sortAlbumsByYear(albums) {
+  const yearOf = (album) => {
+    const year = Number(album && album.year);
+    return Number.isFinite(year) && year > 0 ? year : null;
+  };
+  return [...albums].sort((a, b) => {
+    const ya = yearOf(a);
+    const yb = yearOf(b);
+    if (ya === yb) return 0;
+    if (ya === null) return 1;
+    if (yb === null) return -1;
+    return yb - ya;
+  });
+}
+
+export function countLabel(count, noun) {
+  const n = Number(count) || 0;
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+export function playlistInfo(owner, entries) {
+  return [owner, queueSummary(entries)].filter(Boolean).join(" \u00b7 ");
+}
+
+export function ownPlaylists(playlists, user) {
+  return (playlists || []).filter((playlist) => playlist && playlist.owner === user);
+}
+
+// Frames above the root list each remember their own scroll position; the root's is kept apart.
+export function createViewStack() {
+  const frames = [];
+  let rootScroll = 0;
+  const top = () => frames[frames.length - 1] || null;
+  return {
+    depth: () => frames.length,
+    top,
+    all: () => frames.slice(),
+    rootScroll: () => rootScroll,
+    push(view, scroll) {
+      const current = top();
+      if (current) current.scroll = scroll;
+      else rootScroll = scroll;
+      frames.push({ ...view, scroll: 0 });
+    },
+    pop() {
+      frames.pop();
+      return top();
+    },
+    clear() {
+      frames.length = 0;
+    },
+    reset() {
+      frames.length = 0;
+      rootScroll = 0;
     },
   };
 }
