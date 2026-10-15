@@ -8,6 +8,35 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.8.0] - 2026-10-16
+
+### Added
+
+- Shuffle and repeat buttons on the remote page's player. Shuffle reorders only the
+  tracks after the playing one, so the music does not stop, and switching it off puts
+  them back in the order they were added. Repeat cycles through off, all and one and uses
+  the WiiM's own loop mode, so the physical remote follows it.
+- "Play next" for albums, playlists and songs, next to "Add to queue".
+- Drag handles in the Queue tab to reorder the queue.
+- Playlists: a Playlists row in the library, a playlist view with Play, Play next and
+  Add to queue, and a button on the player to add the playing song to one of your
+  playlists or to a new one.
+- Artist pages with all albums by year, opened from the artist name on the player and
+  in the album view, or from the new Artists section in search.
+- A "Recently played" row at the top of the library.
+- Optional play reporting (`BRIDGE_SCROBBLE`, off by default): the bridge reports
+  finished tracks to Navidrome, so play counts and "recently played" include plays
+  started from the page or the physical remote. Switch scrobbling off in Feishin when
+  using it, or plays count twice.
+- `jukeboxControl` extensions `insert`, `move`, `setShuffle` and `setRepeat`; answers
+  carry `shuffle` and `repeat`.
+
+### Changed
+
+- The bridge sets the WiiM's loop mode itself (4, play through once, unless repeat is
+  on). The factory setting 3 is one of the device's shuffle modes.
+- The queue list keeps its scroll position when it is refreshed.
+
 ## [0.7.0] - 2026-10-15
 
 ### Added

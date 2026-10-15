@@ -158,6 +158,7 @@ Further settings:
 | `BRIDGE_MAX_VOLUME` | `--max-volume` | `100` | ceiling for the volume, 0 to 100 |
 | `BRIDGE_KEEP_QUEUE_ON_START` | `--keep-queue-on-start` | `false` | do not clear the device queue when the bridge starts |
 | `BRIDGE_QUEUE_NAME` | `--queue-name` | `bridge` | name of the queue on the device |
+| `BRIDGE_SCROBBLE` | `--scrobble` | `false` | report plays to Navidrome as the bridge's user, see below |
 | `BRIDGE_CREDENTIALS` | `--credentials` | `~/.config/navidrome-wiim-bridge/credentials.json` | the credentials file |
 | `BRIDGE_REQUEST_LOG` | `--log` | `/dev/null` | file for a JSON log of the device's audio requests |
 | `BRIDGE_DEVICE_BASE` | `--device-base` | `http://<device host>:49152` | the WiiM's UPnP address, if it differs |
@@ -234,7 +235,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.7.0
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.8.0
 ```
 
 ### Kubernetes
@@ -257,6 +258,18 @@ how to use a Navidrome you already run and how to leave the web UI out.
 
 Run one copy only. Two bridges on one WiiM overwrite each other's queue.
 
+### Play history (`--scrobble`, `BRIDGE_SCROBBLE`)
+
+Navidrome counts a play only when a client reports it; fetching the audio does not
+count. With scrobbling on, the bridge watches the WiiM every 5 seconds and reports each
+track that played for half its length or 4 minutes, whichever is shorter, as the
+bridge's Navidrome user. Plays then show up in Navidrome's play counts and "recently
+played", whichever controller started them, the physical remote included.
+
+Clients that report plays themselves would count them twice. Feishin does so by
+default: switch off Settings > General > Scrobble in every Feishin that controls the
+bridge.
+
 ## Using it
 
 **From a Subsonic client:** add a server with the bridge's address and your Navidrome
@@ -266,9 +279,12 @@ to itself, which is why a patched build exists:
 [m8-t/feishin, branch `jukebox-bridge`](https://github.com/m8-t/feishin/tree/jukebox-bridge).
 
 **From a phone:** open `http://<bridge>:8098/remote/`. It is a small page built for
-portrait screens: a player with cover, seek bar, volume and mute, the queue, and a
-library view with search and album covers. Swiping the cover to the left or right plays
-the next or previous track. Sign in with your Navidrome user. The phone
+portrait screens and tablets: a player with cover, seek bar, volume, mute, shuffle and
+repeat, the queue with drag handles to reorder it, and a library with search (artists,
+albums, songs), artist pages, playlists, recently played and recently added albums.
+Albums, playlists and songs can be played now, played next or added to the end of the
+queue, and the playing song can be added to a playlist. Swiping the cover to the left or
+right plays the next or previous track. Sign in with your Navidrome user. The phone
 stores a derived token, not the password.
 
 The page can also put its controls on the phone's lock screen. Phones only show such
@@ -281,10 +297,26 @@ pauses while it is on. The switch is in the page's settings and is off by defaul
 ## Limits
 
 - One device, set at start. No discovery, no multiroom.
-- `jukeboxControl` has no call for mute. The bridge adds a `muted` field to its answers
-  and a `setMute` action. Clients that do not know them simply never use them.
-- `shuffle` as a server action is not supported. A client shuffles by sending the
-  tracks in the order it wants.
+- `jukeboxControl` has no calls for mute, play next, reordering, shuffle mode or repeat.
+  The bridge adds them as extra actions, and extra fields to its answers. Clients that do
+  not know them simply never use them:
+
+  | Action | Parameters | Does |
+  |---|---|---|
+  | `setMute` | `mute=true\|false` | mutes the WiiM; answers carry `muted` |
+  | `insert` | `id` (repeatable) | puts the songs right after the playing track |
+  | `move` | `index`, `toIndex` | moves one queue entry; the playing track cannot be moved |
+  | `setShuffle` | `shuffle=true\|false` | reorders only the tracks after the playing one, so playback does not stop; off restores the order they were added in; answers carry `shuffle` |
+  | `setRepeat` | `repeat=off\|all\|one` | sets the WiiM's own loop mode; answers carry `repeat` |
+
+- The standard `shuffle` action is not supported. A client shuffles by sending the
+  tracks in the order it wants, or with `setShuffle`.
+- Shuffling a long queue takes a moment: the WiiM can only remove one track per call, so
+  a 500-track mix needs about 500 calls (some seconds) before the new order is in place.
+  If the playing track ends during those seconds, the next track can play from the old
+  order and then be cut off. On an album the window is a fraction of a second.
+- Repeat uses the WiiM's loop mode. If another app changes that mode on the device, the
+  bridge does not notice until repeat is set again from the page.
 - Removing the track that is playing stops playback, and it cannot be moved.
 - A bridge restart clears the device queue.
 - The audio URLs carry a secret in the path instead of a login, because the device
@@ -302,7 +334,18 @@ Things the WiiM does that the code works around, found by testing:
 - `CreateQueue` starts playing at once.
 - While its own queue plays, the device reports an empty `CurrentURI`.
 - It fetches a track with one request for the whole file, and starts fetching the next
-  track about 40 seconds before the current one ends.
+  track about 40 seconds before the current one ends. Inserting a track as the next one
+  still works 7 seconds before the end: the device plays the inserted track next.
+- `RemoveTracksInQueue` ignores `RangEnd` and removes only the `RangStart` track. Each
+  call takes about 10 ms.
+- `MoveTracksInQueue` with `IndexList=a` and `ToIndex=b` gives the order of "take out
+  entry a, insert it at b", in both directions.
+- `AppendTracksInQueueEx` with `Direction=1` inserts after the playing track and ignores
+  `StartIndex`, also while paused; `Direction=0` appends at the end.
+- `SetQueueLoopMode` is global and survives a new queue: 0 repeats all, 1 repeats one
+  track, 4 plays through once. 2, 3 and 5 are the device's own shuffle modes: switching
+  into one of them reorders the stored queue itself, so the bridge never uses them.
+  Switching to 4 restores the original order. Factory setting is 3.
 
 ## Releases
 

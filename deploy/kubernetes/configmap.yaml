@@ -15,3 +15,5 @@ data:
   BRIDGE_LOG_LEVEL: "info"
   # Upper volume limit, 0 to 100.
   # BRIDGE_MAX_VOLUME: "70"
+  # Report plays to Navidrome; switch scrobbling off in Feishin then.
+  # BRIDGE_SCROBBLE: "true"
