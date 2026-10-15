@@ -8,7 +8,7 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
-## [Unreleased]
+## [0.6.0] - 2026-10-15
 
 ### Added
 
