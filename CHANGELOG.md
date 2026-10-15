@@ -33,6 +33,10 @@ Each release is published as a container image:
 
 ### Changed
 
+- Phone page: on tablets (touch screens wider than 700 px, or landscape screens taller
+  than 520 px and wider than 1000 px) the seek and volume bars are thicker, with a
+  larger handle, and the transport buttons are a little bigger. Phone sizes are
+  unchanged.
 - Phone page: the queue list no longer rebuilds every row when only the current track
   changes, which keeps a 500-song queue responsive.
 - Player page: the single cover with its carousel swipe is replaced by a coverflow over

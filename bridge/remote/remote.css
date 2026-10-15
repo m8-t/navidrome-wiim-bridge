@@ -315,6 +315,19 @@ body.in-app.has-mini .status { bottom: calc(var(--inset-b) + var(--tabbar-h) + v
 .years { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .chips { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: min(240px, 28dvh); overflow-y: auto; }
 
+@media (pointer: coarse) and (min-width: 700px), (orientation: landscape) and (min-height: 521px) and (min-width: 1000px) {
+  input.slider::-webkit-slider-runnable-track { height: 8px; border-radius: 4px; }
+  input.slider::-webkit-slider-thumb { width: 24px; height: 24px; margin-top: -8px; }
+  input.slider::-moz-range-track { height: 8px; border-radius: 4px; }
+  input.slider::-moz-range-progress { height: 8px; border-radius: 4px; }
+  input.slider::-moz-range-thumb { width: 24px; height: 24px; }
+  .times { margin-top: -4px; }
+  .round.r56 { width: 64px; height: 64px; }
+  .round.r72 { width: 84px; height: 84px; }
+  .round.r72 .ic { width: 42px; height: 42px; }
+  .transport { gap: 32px; }
+}
+
 @media (orientation: landscape) and (max-height: 520px) {
   .player-inner { display: grid; grid-template-columns: minmax(0, 40%) minmax(0, 1fr); grid-template-rows: 1fr auto; column-gap: 24px; padding: calc(var(--inset-t) + 8px) 16px 4px; }
   .player-main { display: contents; }
