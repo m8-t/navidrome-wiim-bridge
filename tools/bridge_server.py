@@ -47,6 +47,7 @@ class Settings:
     max_volume: int
     queue_name: str
     keep_queue_on_start: bool
+    scrobble: bool
     log: Path
     info_file: Path | None
     credentials: str
@@ -100,6 +101,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         const=True,
         default=None,
         help="do not clear the device queue at start (env BRIDGE_KEEP_QUEUE_ON_START: "
+        "true/1/yes or false/0/no, default: false)",
+    )
+    parser.add_argument(
+        "--scrobble",
+        action="store_const",
+        const=True,
+        default=None,
+        help="report plays to Navidrome so its play history includes them (env BRIDGE_SCROBBLE: "
         "true/1/yes or false/0/no, default: false)",
     )
     parser.add_argument(
@@ -197,6 +206,7 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
         args.max_volume, environ, "BRIDGE_MAX_VOLUME", DEFAULT_MAX_VOLUME, 0, 100
     )
     keep_queue = _boolean(args.keep_queue_on_start, environ, "BRIDGE_KEEP_QUEUE_ON_START")
+    scrobble = _boolean(args.scrobble, environ, "BRIDGE_SCROBBLE")
     log = args.log or Path(environ.get("BRIDGE_REQUEST_LOG") or DEFAULT_REQUEST_LOG)
     return Settings(
         advertise_host=advertise_host,
@@ -210,6 +220,7 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
         max_volume=max_volume,
         queue_name=_string(args.queue_name, environ, "BRIDGE_QUEUE_NAME", DEFAULT_QUEUE_NAME),
         keep_queue_on_start=keep_queue,
+        scrobble=scrobble,
         log=log,
         info_file=args.info_file,
         credentials=_string(args.credentials, environ, "BRIDGE_CREDENTIALS", DEFAULT_CREDENTIALS),
@@ -282,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("navidrome at %s", settings.navidrome_url)
     logger.info("device at %s", settings.device_base)
     logger.info("audio URLs under /s/<hidden>")
+    if settings.scrobble:
+        logger.info("scrobbling plays to navidrome")
     config = BridgeConfig(
         navidrome_url=settings.navidrome_url,
         user=user,
@@ -296,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         queue_name=settings.queue_name,
         max_volume=settings.max_volume,
         clear_on_start=not settings.keep_queue_on_start,
+        scrobble=settings.scrobble,
     )
     web.run_app(make_app_factory(config)(), host=settings.bind, port=settings.port, print=None)
     return 0

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 import re
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from test_player import FakeWiim, url_for
 
 from bridge.jukebox import (
     SEEK_ATTEMPTS,
@@ -21,8 +23,10 @@ from bridge.jukebox import (
     ok_envelope,
     track_from_song,
 )
-from bridge.player import PlayerError, PlayerStatus, Track
+from bridge.player import Player, PlayerError, PlayerStatus, QueueDesyncError, Track
+from bridge.scrobble import Scrobble, Scrobbler
 from bridge.soap import UpnpError
+from bridge.wiim import parse_queue_tracks
 
 SONGS: dict[str, dict[str, Any]] = {
     "a": {"id": "a", "title": "A", "artist": "Art", "album": "Alb", "duration": 100},
@@ -70,6 +74,20 @@ class FakePlayer:
     async def remove(self, index: int) -> None:
         self._rec("remove", index)
 
+    async def insert_next(self, tracks: Sequence[Track]) -> None:
+        self._rec("insert_next", list(tracks))
+
+    async def replace_upcoming(self, tracks: Sequence[Track]) -> None:
+        self._rec("replace_upcoming", list(tracks))
+
+    async def move(self, index: int, to: int) -> None:
+        self._rec("move", index, to)
+        if self.idx is not None:
+            if index < self.idx <= to:
+                self.idx -= 1
+            elif to <= self.idx < index:
+                self.idx += 1
+
     async def play_index(self, index: int) -> None:
         self._rec("play_index", index)
         self.idx, self.is_playing = index, True
@@ -95,6 +113,9 @@ class FakePlayer:
 
     async def set_mute(self, muted: bool) -> None:
         self._rec("set_mute", muted)
+
+    async def set_repeat(self, repeat: str) -> None:
+        self._rec("set_repeat", repeat)
 
     async def set_volume(self, volume: int) -> int:
         clamped = min(max(volume, 0), self.ceiling)
@@ -157,7 +178,17 @@ def make_timed() -> tuple[Jukebox, FakePlayer, FakeTime]:
 
 def do(jb: Jukebox, action: str, ids: Sequence[str] = (), **kw: Any) -> dict[str, Any]:
     return run(  # type: ignore[no-any-return]
-        jb.handle(action, ids, kw.get("index"), kw.get("offset"), kw.get("gain"), kw.get("mute"))
+        jb.handle(
+            action,
+            ids,
+            kw.get("index"),
+            kw.get("offset"),
+            kw.get("gain"),
+            kw.get("mute"),
+            kw.get("to_index"),
+            kw.get("shuffle"),
+            kw.get("repeat"),
+        )
     )
 
 
@@ -171,7 +202,16 @@ def test_set_returns_status_and_touches_no_device() -> None:
     version = payload["jukeboxStatus"].pop("queueVersion")
     assert re.fullmatch(r"[0-9a-f]+:1", version)
     assert payload == {
-        "jukeboxStatus": {"currentIndex": 0, "playing": False, "gain": 0.5, "position": 0, "positionMs": 0, "muted": False}
+        "jukeboxStatus": {
+            "currentIndex": 0,
+            "playing": False,
+            "gain": 0.5,
+            "position": 0,
+            "positionMs": 0,
+            "muted": False,
+            "shuffle": False,
+            "repeat": "off",
+        }
     }
     assert player.calls == []
 
@@ -937,3 +977,824 @@ def test_seek_hold_dropped_by_new_seek() -> None:
     do(jb, "skip", index=0, offset=10)
     player.pos, player.sampled_at = 10.0, wall[0]
     assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 10000
+
+
+async def numbered(song_id: str) -> Mapping[str, Any] | None:
+    return {"id": song_id, "title": f"T{song_id}"}
+
+
+def make_numbered(seed: int = 7) -> tuple[Jukebox, FakePlayer]:
+    player = FakePlayer()
+    fake = FakeTime()
+    jb = Jukebox(
+        player,  # type: ignore[arg-type]
+        numbered,
+        sleep=fake.sleep,
+        clock=fake.clock,
+        rng=random.Random(seed),
+    )
+    return jb, player
+
+
+def numbers(count: int) -> list[str]:
+    return [str(n) for n in range(count)]
+
+
+def queue_ids(jb: Jukebox) -> list[str]:
+    assert len(jb._keys) == len(jb.songs)
+    return [str(song["id"]) for song in jb.songs]
+
+
+def shuffled(seed: int, ids: Sequence[str]) -> list[str]:
+    order = list(ids)
+    random.Random(seed).shuffle(order)
+    assert order != list(ids)
+    return order
+
+
+def numbered_queue(count: int, current: int = 0, *, load: bool = False) -> tuple[Jukebox, FakePlayer]:
+    jb, player = make_numbered()
+    do(jb, "set", numbers(count))
+    do(jb, "skip", index=current)
+    if load:
+        do(jb, "start")
+        player.calls.clear()
+    return jb, player
+
+
+def test_insert_on_an_empty_queue_acts_like_add() -> None:
+    jb, player = make()
+    before = version_of(jb)
+    do(jb, "insert", ["b", "a"])
+    assert queue_ids(jb) == ["b", "a"]
+    assert player.calls == []
+    assert version_of(jb) != before
+
+
+def test_insert_not_loaded_goes_after_current_without_device_calls() -> None:
+    jb, player = make()
+    do(jb, "set", ["a", "b", "c"])
+    do(jb, "skip", index=1)
+    status = do(jb, "insert", ["c", "a"])["jukeboxStatus"]
+    assert queue_ids(jb) == ["a", "b", "c", "a", "c"]
+    assert status["currentIndex"] == 1
+    assert player.calls == []
+
+
+def test_insert_loaded_sends_one_device_call_and_keeps_current() -> None:
+    jb, player = make()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.calls.clear()
+    status = do(jb, "insert", ["c", "a"])["jukeboxStatus"]
+    assert player.calls == [
+        ("insert_next", ([track_from_song(SONGS["c"]), track_from_song(SONGS["a"])],))
+    ]
+    assert queue_ids(jb) == ["a", "c", "a", "b"]
+    assert status["currentIndex"] == 0
+
+
+def test_insert_follows_the_track_the_device_is_playing() -> None:
+    jb, player = make()
+    do(jb, "set", ["a", "b", "c"])
+    do(jb, "start")
+    player.idx = 1
+    do(jb, "insert", ["a"])
+    assert queue_ids(jb) == ["a", "b", "a", "c"]
+    assert jb.current == 1
+
+
+def test_insert_unknown_id_changes_nothing() -> None:
+    jb, player = make()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.calls.clear()
+    before = version_of(jb)
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "insert", ["c", "zzz"])
+    assert err.value.code == 70
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "insert")
+    assert err.value.code == 10
+    assert queue_ids(jb) == ["a", "b"]
+    assert player.calls == []
+    assert version_of(jb) == before
+
+
+def test_insert_device_failure_leaves_the_queue_alone() -> None:
+    jb, player = make()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.failing["insert_next"] = UpnpError(701, "x")
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "insert", ["c"])
+    assert err.value.code == 0
+    assert queue_ids(jb) == ["a", "b"]
+
+
+def test_insert_remembers_the_songs() -> None:
+    jb, _ = make()
+    do(jb, "set", ["a", "b"])
+    do(jb, "insert", ["c"])
+    do(jb, "clear")
+    assert jb.describe("c") == ("C", "")
+
+
+@pytest.mark.parametrize("load", [False, True])
+@pytest.mark.parametrize(
+    ("current", "source", "target", "expected", "new_current"),
+    [
+        (0, 3, 1, ["0", "3", "1", "2", "4"], 0),
+        (0, 1, 3, ["0", "2", "3", "1", "4"], 0),
+        (2, 0, 3, ["1", "2", "3", "0", "4"], 1),
+        (2, 4, 0, ["4", "0", "1", "2", "3"], 3),
+        (2, 0, 2, ["1", "2", "0", "3", "4"], 1),
+        (2, 4, 2, ["0", "1", "4", "2", "3"], 3),
+        (2, 0, 1, ["1", "0", "2", "3", "4"], 2),
+        (2, 3, 4, ["0", "1", "2", "4", "3"], 2),
+    ],
+)
+def test_move_reorders_and_keeps_pointing_at_the_current_entry(
+    load: bool, current: int, source: int, target: int, expected: list[str], new_current: int
+) -> None:
+    jb, player = numbered_queue(5, current, load=load)
+    before = version_of(jb)
+    status = do(jb, "move", index=source, to_index=target)["jukeboxStatus"]
+    assert queue_ids(jb) == expected
+    assert status["currentIndex"] == new_current
+    assert expected[new_current] == str(current)
+    assert player.calls == ([("move", (source, target))] if load else [])
+    assert version_of(jb) != before
+    assert do(jb, "status")["jukeboxStatus"]["currentIndex"] == new_current
+
+
+@pytest.mark.parametrize("load", [False, True])
+def test_move_keeps_the_playing_entry_when_a_song_id_repeats(load: bool) -> None:
+    jb, _ = make()
+    do(jb, "set", ["a", "b", "a", "c"])
+    do(jb, "skip", index=2)
+    if load:
+        do(jb, "start")
+    assert jb.songs[0] is jb.songs[2]
+    status = do(jb, "move", index=1, to_index=3)["jukeboxStatus"]
+    assert queue_ids(jb) == ["a", "a", "c", "b"]
+    assert status["currentIndex"] == 1
+
+
+@pytest.mark.parametrize("load", [False, True])
+def test_move_refuses_the_playing_track(load: bool) -> None:
+    jb, player = numbered_queue(4, 2, load=load)
+    before = version_of(jb)
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "move", index=2, to_index=0)
+    assert (err.value.code, err.value.message) == (0, "cannot move the playing track")
+    assert queue_ids(jb) == numbers(4)
+    assert player.calls == []
+    assert version_of(jb) == before
+
+
+@pytest.mark.parametrize(("index", "to_index"), [(5, 0), (0, 5), (-1, 0), (0, -1)])
+def test_move_out_of_range(index: int, to_index: int) -> None:
+    jb, _ = numbered_queue(5, 1)
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "move", index=index, to_index=to_index)
+    assert (err.value.code, err.value.message) == (0, "index out of range")
+    assert queue_ids(jb) == numbers(5)
+
+
+def test_move_needs_both_indexes() -> None:
+    jb, _ = numbered_queue(5)
+    for kw, name in (({"index": 1}, "toIndex"), ({"to_index": 1}, "index"), ({"index": 9}, "toIndex")):
+        with pytest.raises(JukeboxError) as err:
+            do(jb, "move", **kw)
+        assert err.value.code == 10
+        assert err.value.message.endswith(name)
+
+
+@pytest.mark.parametrize("load", [False, True])
+def test_move_to_the_same_slot_is_a_noop(load: bool) -> None:
+    jb, player = numbered_queue(5, 1, load=load)
+    before = version_of(jb)
+    do(jb, "move", index=3, to_index=3)
+    do(jb, "move", index=1, to_index=1)
+    assert queue_ids(jb) == numbers(5)
+    assert player.calls == []
+    assert version_of(jb) == before
+
+
+def test_move_device_failure_leaves_the_queue_alone() -> None:
+    jb, player = numbered_queue(5, 1, load=True)
+    player.failing["move"] = UpnpError(701, "x")
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "move", index=3, to_index=0)
+    assert err.value.code == 0
+    assert queue_ids(jb) == numbers(5)
+    assert jb.current == 1
+
+
+def test_status_carries_shuffle() -> None:
+    jb, _ = make_numbered()
+    do(jb, "set", numbers(4))
+    assert do(jb, "status")["jukeboxStatus"]["shuffle"] is False
+    assert do(jb, "setShuffle", shuffle=True)["jukeboxStatus"]["shuffle"] is True
+    assert do(jb, "get")["jukeboxPlaylist"]["shuffle"] is True
+    assert do(jb, "setShuffle", shuffle=False)["jukeboxStatus"]["shuffle"] is False
+
+
+def test_shuffle_needs_a_value() -> None:
+    jb, _ = make_numbered()
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setShuffle")
+    assert err.value.code == 10
+
+
+def test_shuffle_reorders_only_the_upcoming_part() -> None:
+    jb, player = numbered_queue(8, 2)
+    before = version_of(jb)
+    do(jb, "setShuffle", shuffle=True)
+    assert queue_ids(jb) == ["0", "1", "2", *shuffled(7, numbers(8)[3:])]
+    assert jb.current == 2
+    assert player.calls == []
+    assert version_of(jb) != before
+
+
+def test_shuffle_again_while_on_reshuffles() -> None:
+    jb, _ = numbered_queue(6)
+    do(jb, "setShuffle", shuffle=True)
+    first = queue_ids(jb)
+    do(jb, "setShuffle", shuffle=True)
+    second = queue_ids(jb)
+    rng = random.Random(7)
+    expected = numbers(6)
+    for _ in range(2):
+        tail = expected[1:]
+        rng.shuffle(tail)
+        expected[1:] = tail
+    assert second == expected
+    assert second != first
+    assert jb.shuffle
+
+
+def test_shuffle_off_restores_add_order_including_later_songs() -> None:
+    jb, _ = numbered_queue(6, 1)
+    do(jb, "setShuffle", shuffle=True)
+    assert queue_ids(jb) != numbers(6)
+    do(jb, "add", ["6", "7"])
+    do(jb, "insert", ["8"])
+    assert len(queue_ids(jb)) == 9
+    assert jb.current == 1
+    do(jb, "setShuffle", shuffle=False)
+    assert queue_ids(jb) == numbers(9)
+    assert not jb.shuffle
+
+
+def test_shuffle_off_when_already_off_does_nothing() -> None:
+    jb, player = numbered_queue(4, load=True)
+    do(jb, "insert", ["9"])
+    before = version_of(jb)
+    player.calls.clear()
+    do(jb, "setShuffle", shuffle=False)
+    assert queue_ids(jb) == ["0", "9", "1", "2", "3"]
+    assert player.calls == []
+    assert version_of(jb) == before
+
+
+def test_moves_and_removals_while_shuffled_do_not_disturb_the_order_keys() -> None:
+    jb, _ = numbered_queue(6)
+    do(jb, "setShuffle", shuffle=True)
+    do(jb, "move", index=1, to_index=4)
+    victim = queue_ids(jb)[2]
+    do(jb, "remove", index=2)
+    do(jb, "setShuffle", shuffle=False)
+    assert queue_ids(jb) == [n for n in numbers(6) if n != victim]
+
+
+def test_set_and_clear_reset_shuffle() -> None:
+    for action, kw in (("set", {"ids": ["a", "b"]}), ("clear", {})):
+        jb, _ = make_numbered()
+        do(jb, "set", numbers(5))
+        do(jb, "setShuffle", shuffle=True)
+        assert jb.shuffle
+        do(jb, action, **kw)
+        assert not jb.shuffle
+        assert do(jb, "status")["jukeboxStatus"]["shuffle"] is False
+    assert jb._keys == []
+    do(jb, "set", numbers(3))
+    assert jb._keys == [0, 1, 2]
+
+
+@pytest.mark.parametrize(("count", "current"), [(1, 0), (2, 1), (5, 4)])
+def test_shuffle_with_nothing_to_reorder_sends_nothing(count: int, current: int) -> None:
+    jb, player = numbered_queue(count, current, load=True)
+    before = version_of(jb)
+    status = do(jb, "setShuffle", shuffle=True)["jukeboxStatus"]
+    assert status["shuffle"] is True
+    assert player.calls == []
+    assert version_of(jb) == before
+
+
+def test_loaded_shuffle_replaces_the_upcoming_tracks_on_the_device() -> None:
+    jb, player = numbered_queue(8, 2, load=True)
+    before = version_of(jb)
+    status = do(jb, "setShuffle", shuffle=True)["jukeboxStatus"]
+    expected = shuffled(7, numbers(8)[3:])
+    assert player.calls == [("replace_upcoming", ([Track(i, f"T{i}") for i in expected],))]
+    assert queue_ids(jb) == ["0", "1", "2", *expected]
+    assert (status["currentIndex"], status["playing"], status["shuffle"]) == (2, True, True)
+    assert version_of(jb) != before
+    player.calls.clear()
+    do(jb, "setShuffle", shuffle=False)
+    assert player.calls == [("replace_upcoming", ([Track(i, f"T{i}") for i in numbers(8)[3:]],))]
+    assert queue_ids(jb) == numbers(8)
+
+
+def test_loaded_shuffle_follows_the_track_the_device_is_playing() -> None:
+    jb, player = numbered_queue(8, 0, load=True)
+    player.idx = 4
+    do(jb, "setShuffle", shuffle=True)
+    expected = shuffled(7, numbers(8)[5:])
+    assert player.calls == [("replace_upcoming", ([Track(i, f"T{i}") for i in expected],))]
+    assert queue_ids(jb) == [*numbers(5), *expected]
+
+
+def test_shuffle_failure_after_the_remove_reloads_the_queue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    jb, player = numbered_queue(6, load=True)
+    player.failing["replace_upcoming"] = QueueDesyncError("incomplete")
+    status = do(jb, "setShuffle", shuffle=True)["jukeboxStatus"]
+    expected = ["0", *shuffled(7, numbers(6)[1:])]
+    assert names(player) == ["replace_upcoming", "load"]
+    _, (tracks, start, play) = player.calls[1]
+    assert [t.song_id for t in tracks] == expected
+    assert (start, play) == (0, True)
+    assert queue_ids(jb) == expected
+    assert (status["shuffle"], status["playing"]) == (True, True)
+    assert jb.loaded
+    (warning,) = seek_warnings(caplog)
+    assert warning.startswith("reorder left the device queue out of step")
+
+
+def test_shuffle_reload_resumes_the_position_and_keeps_a_pause() -> None:
+    jb, player = numbered_queue(6, load=True)
+    player.failing["replace_upcoming"] = QueueDesyncError("incomplete")
+    player.stale = [34.0, 0.0]
+    do(jb, "setShuffle", shuffle=True)
+    assert names(player) == ["replace_upcoming", "load", "seek"]
+    assert player.calls[2] == ("seek", (34,))
+
+    jb, player = numbered_queue(6, load=True)
+    do(jb, "stop")
+    player.calls.clear()
+    player.failing["replace_upcoming"] = QueueDesyncError("incomplete")
+    do(jb, "setShuffle", shuffle=True)
+    assert names(player) == ["replace_upcoming", "load"]
+    assert player.calls[1][1][1:] == (0, False)
+
+
+def test_shuffle_reload_failure_unloads_so_the_next_start_reloads() -> None:
+    jb, player = numbered_queue(6, load=True)
+    player.failing["replace_upcoming"] = QueueDesyncError("incomplete")
+    player.failing["load"] = UpnpError(701, "x")
+    before = version_of(jb)
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setShuffle", shuffle=True)
+    assert err.value.code == 0
+    expected = ["0", *shuffled(7, numbers(6)[1:])]
+    assert queue_ids(jb) == expected
+    assert jb.shuffle
+    assert not jb.loaded
+    assert not jb.playing
+    assert version_of(jb) != before
+    del player.failing["load"]
+    player.calls.clear()
+    do(jb, "start")
+    assert names(player) == ["load"]
+    assert [t.song_id for t in player.calls[0][1][0]] == expected
+
+
+def test_shuffle_failed_remove_keeps_order_and_device() -> None:
+    jb, player = numbered_queue(6, load=True)
+    player.failing["replace_upcoming"] = UpnpError(701, "x")
+    before = version_of(jb)
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setShuffle", shuffle=True)
+    assert err.value.code == 0
+    assert names(player) == ["replace_upcoming"]
+    assert queue_ids(jb) == numbers(6)
+    assert not jb.shuffle
+    assert jb.loaded
+    assert version_of(jb) == before
+
+
+def test_queue_version_bumps_for_insert_move_and_shuffle() -> None:
+    jb, _ = numbered_queue(5)
+    seen = [version_of(jb)]
+    for action, kw in (
+        ("insert", {"ids": ["9"]}),
+        ("move", {"index": 3, "to_index": 1}),
+        ("setShuffle", {"shuffle": True}),
+        ("setShuffle", {"shuffle": False}),
+    ):
+        do(jb, action, **kw)
+        seen.append(version_of(jb))
+    assert len(set(seen)) == len(seen)
+
+
+def test_http_to_index_and_shuffle_parameters() -> None:
+    async def get(client: TestClient[Any, Any], query: str) -> dict[str, Any]:
+        resp = await client.get(f"/rest/jukeboxControl?{query}")
+        return (await resp.json())["subsonic-response"]  # type: ignore[no-any-return]
+
+    async def scenario() -> None:
+        jb, _ = make_numbered()
+        async with serve(jb) as client:
+            await get(client, "action=set&id=0&id=1&id=2&id=3")
+            assert (await get(client, "action=move&index=3&toIndex=1"))["status"] == "ok"
+            assert queue_ids(jb) == ["0", "3", "1", "2"]
+            for query in ("action=move&index=1&toIndex=abc", "action=move&index=1"):
+                error = (await get(client, query))["error"]
+                assert error["code"] == 10
+                assert "toIndex" in error["message"]
+            assert (await get(client, "action=move&index=1&toIndex=9"))["error"]["code"] == 0
+            for value, expected in (("true", True), ("0", False), ("1", True), ("FALSE", False)):
+                body = await get(client, f"action=setShuffle&shuffle={value}")
+                assert body["jukeboxStatus"]["shuffle"] is expected
+            error = (await get(client, "action=setShuffle&shuffle=maybe"))["error"]
+            assert error["code"] == 10
+            assert "shuffle" in error["message"]
+            assert (await get(client, "action=setShuffle"))["error"]["code"] == 10
+            refused = (await get(client, "action=shuffle&shuffle=true"))["error"]
+            assert (refused["code"], refused["message"]) == (0, "shuffle is not supported")
+
+    run(scenario())
+
+
+def test_http_insert_takes_ids_from_the_form_too() -> None:
+    async def scenario() -> None:
+        jb, _ = make_numbered()
+        async with serve(jb) as client:
+            await client.get("/rest/jukeboxControl?action=set&id=0&id=1")
+            data = [("action", "insert"), ("id", "5"), ("id", "6")]
+            resp = await client.post("/rest/jukeboxControl", data=data)
+            assert (await resp.json())["subsonic-response"]["status"] == "ok"
+            assert queue_ids(jb) == ["0", "5", "6", "1"]
+            await client.get("/rest/jukeboxControl?action=insert&id=7")
+            assert queue_ids(jb) == ["0", "7", "5", "6", "1"]
+
+    run(scenario())
+
+
+def test_http_extension_action_lines(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb) as client:
+            await client.get("/rest/jukeboxControl?action=set&id=a&id=b")
+            await client.get("/rest/jukeboxControl?action=insert&id=c")
+            await client.get("/rest/jukeboxControl?action=move&index=1&toIndex=2")
+            await client.get("/rest/jukeboxControl?action=setShuffle&shuffle=true")
+            await client.get("/rest/jukeboxControl?action=setShuffle&shuffle=0")
+
+    run(scenario())
+    lines = jukebox_lines(caplog)
+    assert lines[1] == 'jukebox action=insert index=- offset=- ids=1 gain=- mute=- first="C"'
+    assert lines[2] == "jukebox action=move index=1 offset=- ids=0 gain=- mute=- toIndex=2"
+    assert lines[3] == "jukebox action=setShuffle index=- offset=- ids=0 gain=- mute=- shuffle=True"
+    assert lines[4].endswith("mute=- shuffle=False")
+
+
+def test_status_carries_repeat_and_set_repeat_reaches_the_device_at_once() -> None:
+    jb, player = make()
+    assert do(jb, "status")["jukeboxStatus"]["repeat"] == "off"
+    for mode in ("all", "one", "off"):
+        assert do(jb, "setRepeat", repeat=mode)["jukeboxStatus"]["repeat"] == mode
+    assert do(jb, "get")["jukeboxPlaylist"]["repeat"] == "off"
+    assert [args for name, args in player.calls if name == "set_repeat"] == [
+        ("all",),
+        ("one",),
+        ("off",),
+    ]
+
+
+def test_set_repeat_needs_a_known_mode() -> None:
+    jb, player = make()
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setRepeat")
+    assert err.value.code == 10
+    for bad in ("loop", "shuffle", ""):
+        with pytest.raises(JukeboxError) as err:
+            do(jb, "setRepeat", repeat=bad)
+        assert err.value.code == 10
+    assert "set_repeat" not in names(player)
+    assert jb.repeat == "off"
+
+
+def test_set_repeat_failure_keeps_the_mode() -> None:
+    jb, player = make()
+    player.failing["set_repeat"] = UpnpError(701, "x")
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setRepeat", repeat="all")
+    assert err.value.code == 0
+    assert jb.repeat == "off"
+
+
+def test_repeat_survives_set_and_clear_and_leaves_the_queue_version_alone() -> None:
+    jb, _ = make()
+    do(jb, "set", ["a", "b"])
+    before = version_of(jb)
+    do(jb, "setRepeat", repeat="one")
+    assert version_of(jb) == before
+    do(jb, "set", ["c"])
+    assert do(jb, "status")["jukeboxStatus"]["repeat"] == "one"
+    do(jb, "clear")
+    assert do(jb, "status")["jukeboxStatus"]["repeat"] == "one"
+
+
+def test_http_set_repeat_parameter_and_log_line(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+
+    async def get(client: TestClient[Any, Any], query: str) -> dict[str, Any]:
+        resp = await client.get(f"/rest/jukeboxControl?{query}")
+        return (await resp.json())["subsonic-response"]  # type: ignore[no-any-return]
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb) as client:
+            body = await get(client, "action=setRepeat&repeat=all")
+            assert body["jukeboxStatus"]["repeat"] == "all"
+            body = await get(client, "action=setRepeat&repeat=ONE")
+            assert body["jukeboxStatus"]["repeat"] == "one"
+            for query in ("action=setRepeat&repeat=loop", "action=setRepeat", "action=status&repeat=x"):
+                error = (await get(client, query))["error"]
+                assert error["code"] == 10
+            assert "repeat" in (await get(client, "action=setRepeat&repeat=2"))["error"]["message"]
+
+    run(scenario())
+    lines = jukebox_lines(caplog)
+    assert lines[0] == "jukebox action=setRepeat index=- offset=- ids=0 gain=- mute=- repeat=all"
+    assert lines[1].endswith("mute=- repeat=one")
+
+
+class RecordingScrobbler(Scrobbler):
+    def __init__(self) -> None:
+        async def never(song_id: str, time_ms: int, submission: bool) -> bool:
+            raise AssertionError("delivery is not under test")
+
+        super().__init__(never)
+        self.events: list[Scrobble] = []
+
+    def submit(self, events: Sequence[Scrobble]) -> None:
+        self.events.extend(events)
+
+    def take(self) -> list[Scrobble]:
+        taken, self.events = self.events, []
+        return taken
+
+
+def make_scrobbling(
+    lookup_fn: Any = lookup,
+) -> tuple[Jukebox, FakePlayer, RecordingScrobbler, list[float]]:
+    player = FakePlayer()
+    sink = RecordingScrobbler()
+    wall = [1000.0]
+    jb = Jukebox(player, lookup_fn, wall=lambda: wall[0], scrobbler=sink)  # type: ignore[arg-type]
+    return jb, player, sink, wall
+
+
+def sample(
+    jb: Jukebox, player: FakePlayer, wall: list[float], at: float, pos: float, idx: int = 0
+) -> None:
+    wall[0], player.pos, player.idx, player.sampled_at = at, pos, idx, at
+    do(jb, "status")
+
+
+def play_for(
+    jb: Jukebox, player: FakePlayer, wall: list[float], seconds: int, idx: int = 0
+) -> None:
+    """Sample every 5 s, continuing from the last sampled time and position."""
+    for _ in range(seconds // 5):
+        sample(jb, player, wall, wall[0] + 5, player.pos + 5, idx)
+
+
+def test_a_sync_reports_now_playing_and_the_finished_play() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    assert sink.take() == []
+    sample(jb, player, wall, 1000.0, 0.0)
+    assert sink.take() == [Scrobble("a", 1_000_000, False)]
+    play_for(jb, player, wall, 50)
+    assert sink.take() == []
+    sample(jb, player, wall, 1055.0, 0.0, idx=1)
+    assert sink.take() == [Scrobble("a", 1_000_000, True), Scrobble("b", 1_055_000, False)]
+
+
+def test_skipping_early_reports_no_play() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    play_for(jb, player, wall, 10)
+    sample(jb, player, wall, 1012.0, 0.0, idx=1)
+    assert [e.submission for e in sink.take()] == [False, False]
+
+
+def test_the_same_song_twice_in_the_queue_is_two_plays() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a", "a"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    play_for(jb, player, wall, 60)
+    sample(jb, player, wall, 1065.0, 0.0, idx=1)
+    assert sink.take() == [
+        Scrobble("a", 1_000_000, False),
+        Scrobble("a", 1_000_000, True),
+        Scrobble("a", 1_065_000, False),
+    ]
+
+
+def test_repeat_one_loop_counts_as_another_play() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    play_for(jb, player, wall, 95)
+    sample(jb, player, wall, 1100.0, 1.0)
+    assert sink.take() == [
+        Scrobble("a", 1_000_000, False),
+        Scrobble("a", 1_000_000, True),
+        Scrobble("a", 1_099_000, False),
+    ]
+
+
+def test_set_clear_and_removing_the_playing_entry_end_the_play() -> None:
+    for action, kw in (
+        ("set", {"ids": ["b"]}),
+        ("clear", {}),
+        ("remove", {"index": 0}),
+    ):
+        jb, player, sink, wall = make_scrobbling()
+        do(jb, "set", ["a", "b"])
+        do(jb, "start")
+        sample(jb, player, wall, 1000.0, 0.0)
+        play_for(jb, player, wall, 50)
+        sink.take()
+        wall[0] = 1055.0
+        do(jb, action, **kw)
+        assert sink.take() == [Scrobble("a", 1_000_000, True)], action
+        do(jb, "status")
+        assert sink.take() == []
+
+
+def test_lost_control_ends_the_play() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    play_for(jb, player, wall, 60)
+    sink.take()
+    player.override = PlayerStatus(None, False, 0.0, False, "PLAYING")
+    do(jb, "status")
+    assert sink.take() == [Scrobble("a", 1_000_000, True)]
+
+
+def test_moving_and_shuffling_do_not_end_the_play() -> None:
+    async def numbered_long(song_id: str) -> Mapping[str, Any] | None:
+        return {"id": song_id, "title": song_id, "duration": 200}
+
+    jb, player, sink, wall = make_scrobbling(numbered_long)
+    do(jb, "set", numbers(5))
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 0.0)
+    sink.take()
+    do(jb, "move", index=3, to_index=1)
+    do(jb, "setShuffle", shuffle=True)
+    sample(jb, player, wall, 1005.0, 5.0)
+    assert sink.take() == []
+
+
+def test_no_scrobbler_means_no_tracking() -> None:
+    jb, _ = make()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "status")
+    do(jb, "clear")
+    assert jb._plays is None
+
+
+def test_poll_syncs_only_when_loaded_and_stale() -> None:
+    jb, player, fake = make_timed()
+    assert run(jb.poll(5.0)) is False
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    assert run(jb.poll(5.0)) is False
+    fake.now += 6.0
+    player.pre_refreshes = [(0, True)]
+    assert run(jb.poll(5.0)) is True
+    assert player.pre_refreshes == []
+    fake.now += 2.0
+    player.pre_refreshes = [(0, True)]
+    assert run(jb.poll(5.0)) is False
+    assert player.pre_refreshes == [(0, True)]
+
+
+def test_poll_picks_up_what_the_device_is_doing() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    fake.now += 6.0
+    player.idx = 1
+    assert run(jb.poll(5.0)) is True
+    assert jb.current == 1
+
+
+def test_poll_waits_for_the_lock_the_requests_use() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    fake.now += 6.0
+    player.pre_refreshes = [(0, True)]
+
+    async def scenario() -> None:
+        async with jb.lock:
+            task = asyncio.create_task(jb.poll(5.0))
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            assert player.pre_refreshes == [(0, True)]
+        assert await task is True
+
+    run(scenario())
+    assert player.pre_refreshes == []
+
+
+def test_http_requests_use_the_same_lock_as_the_watcher() -> None:
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb) as client:
+            async with jb.lock:
+                task = asyncio.create_task(client.get("/rest/jukeboxControl?action=status"))
+                await asyncio.sleep(0.05)
+                assert not task.done()
+            resp = await task
+            assert resp.status == 200
+
+    run(scenario())
+
+
+def names_of(wiim: FakeWiim) -> list[str]:
+    return [name for name, _ in wiim.calls]
+
+
+def make_on_device(seed: int = 7) -> tuple[Jukebox, FakeWiim]:
+    wiim = FakeWiim()
+    fake = FakeTime()
+    jb = Jukebox(
+        Player(wiim, url_for),  # type: ignore[arg-type]
+        numbered,
+        sleep=fake.sleep,
+        clock=fake.clock,
+        rng=random.Random(seed),
+    )
+    do(jb, "set", numbers(6))
+    do(jb, "start")
+    wiim.calls.clear()
+    return jb, wiim
+
+
+def test_shuffle_on_the_device_removes_track_by_track_and_appends_once() -> None:
+    jb, wiim = make_on_device()
+    do(jb, "setShuffle", shuffle=True)
+    calls = [(n, a) for n, a in wiim.calls if n in ("queue_remove", "queue_append")]
+    assert [n for n, _ in calls] == ["queue_remove"] * 5 + ["queue_append"]
+    assert [a for n, a in calls[:5]] == [("bridge", i, i) for i in range(6, 1, -1)]
+    assert calls[5][1][1] == 1
+    assert queue_ids(jb) == ["0", *shuffled(7, numbers(6)[1:])]
+
+
+def test_a_failed_third_remove_reloads_the_whole_queue() -> None:
+    jb, wiim = make_on_device()
+    wiim.fail_after = {"queue_remove": 2}
+    status = do(jb, "setShuffle", shuffle=True)["jukeboxStatus"]
+    expected = ["0", *shuffled(7, numbers(6)[1:])]
+    assert [n for n, _ in wiim.calls if n == "queue_remove"] == ["queue_remove"] * 3
+    assert "queue_create" in names_of(wiim)
+    context = [a for n, a in wiim.calls if n == "queue_create"][-1][0]
+    assert [t["url"] for t in parse_queue_tracks(context)] == [url_for(i) for i in expected]
+    assert queue_ids(jb) == expected
+    assert (status["shuffle"], jb.loaded) == (True, True)
+
+
+def test_a_failed_first_remove_changes_nothing_and_does_not_reload() -> None:
+    jb, wiim = make_on_device()
+    wiim.failing = {"queue_remove"}
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "setShuffle", shuffle=True)
+    assert err.value.code == 0
+    assert names_of(wiim).count("queue_remove") == 1
+    assert "queue_create" not in names_of(wiim)
+    assert queue_ids(jb) == numbers(6)
+    assert not jb.shuffle
+    assert jb.loaded

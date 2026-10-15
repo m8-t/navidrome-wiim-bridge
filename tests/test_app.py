@@ -65,6 +65,7 @@ class FakeNavidrome:
         for path in ("/rest/ping", "/rest/ping.view"):
             self.app.router.add_get(path, self.ping)
         self.app.router.add_get("/rest/getSong", self.get_song)
+        self.app.router.add_get("/rest/scrobble", self.scrobble)
         self.app.router.add_get("/rest/stream", self.stream)
         self.app.router.add_route("*", "/api/thing", self.thing)
         self.app.router.add_get("/gz", self.gz)
@@ -103,6 +104,11 @@ class FakeNavidrome:
         if song_id in ("a", "b"):
             return web.json_response(self.envelope("ok", song=song(song_id)))
         return web.json_response(self.envelope("failed"))
+
+    async def scrobble(self, request: web.Request) -> web.Response:
+        await self._record(request)
+        good = request.query.get("id") != "bad"
+        return web.json_response(self.envelope("ok" if good else "failed"))
 
     async def stream(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -191,6 +197,23 @@ def test_get_song() -> None:
         assert first["query"]["id"] == "a"
         assert first["query"]["s"] == "abcd"
         assert first["headers"]["Accept-Encoding"] == "identity"
+
+    with_client(scenario)
+
+
+def test_scrobble_sends_id_time_and_submission() -> None:
+    async def scenario(client: NavidromeClient, fake: FakeNavidrome) -> None:
+        assert await client.scrobble("a", 1700000000123, True) is True
+        assert await client.scrobble("a", 1700000000456, False) is True
+        assert await client.scrobble("bad", 1, True) is False
+        first, second, _ = fake.requests
+        assert first["path"] == "/rest/scrobble"
+        assert first["query"]["id"] == "a"
+        assert first["query"]["time"] == "1700000000123"
+        assert first["query"]["submission"] == "true"
+        assert first["query"]["u"] == "dan"
+        assert first["query"]["s"] == "abcd"
+        assert second["query"]["submission"] == "false"
 
     with_client(scenario)
 
@@ -500,6 +523,65 @@ def test_bridge_server_keep_queue_option(tmp_path: Path, monkeypatch: pytest.Mon
     assert bridge_server.main(base) == 0
     assert bridge_server.main([*base, "--keep-queue-on-start"]) == 0
     assert [c.clear_on_start for c in captured] == [True, False]
+    assert bridge_server.main([*base, "--scrobble"]) == 0
+    assert [c.scrobble for c in captured] == [False, False, True]
+
+
+def scrobble_bridge(
+    tmp_path: Path,
+    scenario: Callable[[TestClient[Any, Any], FakeNavidrome, FakeWiim], Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    **changes: Any,
+) -> None:
+    monkeypatch.setattr("bridge.app.POLL_INTERVAL_S", 0.05)
+    wiim = FakeWiim()
+
+    async def go() -> None:
+        fake = FakeNavidrome()
+        async with TestServer(fake.app) as server:
+            base = make_config(str(server.make_url("")).rstrip("/"), tmp_path)
+            app = build_app(dataclasses.replace(base, **changes), wiim)
+            async with TestClient(TestServer(app)) as client:
+                await scenario(client, fake, wiim)
+
+    run(go())
+
+
+async def wait_for_scrobbles(fake: FakeNavidrome, count: int) -> list[dict[str, Any]]:
+    for _ in range(300):
+        found = [r for r in fake.requests if r["path"] == "/rest/scrobble"]
+        if len(found) >= count:
+            return found
+        await asyncio.sleep(0.01)
+    raise AssertionError("scrobble requests never arrived")
+
+
+def test_scrobbling_reports_now_playing_from_the_background_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        for query in ("action=set&id=a&id=b", "action=start"):
+            await client.get(f"/rest/jukeboxControl?{query}&u=dan&p=pw")
+        (request,) = await wait_for_scrobbles(fake, 1)
+        assert request["query"]["id"] == "a"
+        assert request["query"]["submission"] == "false"
+        assert request["query"]["time"].isdigit()
+        await asyncio.sleep(0.2)
+        assert fake.count("/rest/scrobble") == 1
+
+    scrobble_bridge(tmp_path, scenario, monkeypatch, scrobble=True)
+
+
+def test_scrobbling_is_off_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        for query in ("action=set&id=a", "action=start", "action=status"):
+            await client.get(f"/rest/jukeboxControl?{query}&u=dan&p=pw")
+        polled = wiim.calls.count(("state", ()))
+        await asyncio.sleep(0.2)
+        assert fake.count("/rest/scrobble") == 0
+        assert wiim.calls.count(("state", ())) == polled
+
+    scrobble_bridge(tmp_path, scenario, monkeypatch)
 
 
 def test_remote_redirect_and_pages(tmp_path: Path) -> None:
@@ -917,6 +999,16 @@ def test_boolean_setting_precedence() -> None:
     assert settings_for("--keep-queue-on-start", env=env).keep_queue_on_start is True
 
 
+def test_scrobble_setting_defaults_to_off() -> None:
+    assert settings_for().scrobble is False
+    assert settings_for("--scrobble").scrobble is True
+    assert settings_for(env={"BRIDGE_SCROBBLE": ""}).scrobble is False
+    for value, expected in [("true", True), ("1", True), ("YES", True), ("False", False),
+                            ("0", False), ("no", False)]:  # fmt: skip
+        assert settings_for(env={"BRIDGE_SCROBBLE": value}).scrobble is expected
+    assert settings_for("--scrobble", env={"BRIDGE_SCROBBLE": "false"}).scrobble is True
+
+
 def test_other_defaults_and_env() -> None:
     s = settings_for()
     assert (s.bind, s.queue_name, s.log, s.info_file) == (
@@ -1003,7 +1095,7 @@ def test_missing_advertise_host() -> None:
     [
         ("BRIDGE_PORT", "abc"), ("BRIDGE_PORT", "0"), ("BRIDGE_PORT", "70000"),
         ("BRIDGE_MAX_VOLUME", "-1"), ("BRIDGE_MAX_VOLUME", "101"),
-        ("BRIDGE_KEEP_QUEUE_ON_START", "maybe"),
+        ("BRIDGE_KEEP_QUEUE_ON_START", "maybe"), ("BRIDGE_SCROBBLE", "maybe"),
     ],
 )  # fmt: skip
 def test_invalid_numeric_and_boolean_settings(name: str, value: str) -> None:

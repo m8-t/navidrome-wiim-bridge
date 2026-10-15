@@ -1,5 +1,6 @@
 """Combined bridge service: jukebox endpoint, audio proxy and Navidrome pass-through."""
 
+import asyncio
 import json
 import logging
 import time
@@ -15,6 +16,7 @@ from yarl import URL
 from bridge.jukebox import Jukebox, add_jukebox_routes
 from bridge.player import Player
 from bridge.proxy import ProxyConfig, add_proxy_routes
+from bridge.scrobble import POLL_INTERVAL_S, Scrobbler, watch
 from bridge.subsonic import UPSTREAM_HEADERS, subsonic_params
 
 logger = logging.getLogger("bridge.app")
@@ -54,6 +56,7 @@ class BridgeConfig:
     profile: str = "range"
     max_volume: int = 100
     clear_on_start: bool = True
+    scrobble: bool = False
 
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
@@ -100,6 +103,16 @@ class NavidromeClient:
             return None
         song = body.get("song")
         return song if isinstance(song, dict) else None
+
+    async def scrobble(self, song_id: str, time_ms: int, submission: bool) -> bool:
+        params = subsonic_params(self._user, self._password, self._salt)
+        params |= {
+            "id": song_id,
+            "time": str(time_ms),
+            "submission": "true" if submission else "false",
+        }
+        body = await self._get_json("/rest/scrobble", params)
+        return body is not None and body.get("status") == "ok"
 
     async def check_caller(self, params: Mapping[str, str]) -> bool:
         if "u" not in params and "apiKey" not in params:
@@ -215,7 +228,14 @@ def build_app(
     player = Player(
         wiim, lambda sid: stream_url(config, sid), config.queue_name, config.max_volume
     )
-    jukebox = Jukebox(player, lookup)
+    scrobbler = None
+    if config.scrobble:
+
+        async def send_scrobble(song_id: str, time_ms: int, submission: bool) -> bool:
+            return await app[NAVIDROME_KEY].scrobble(song_id, time_ms, submission)
+
+        scrobbler = Scrobbler(send_scrobble)
+    jukebox = Jukebox(player, lookup, scrobbler=scrobbler)
     add_proxy_routes(
         app,
         ProxyConfig(
@@ -242,6 +262,19 @@ def build_app(
     app[JUKEBOX_KEY] = jukebox
     add_jukebox_routes(app, jukebox, authenticate)
     app.cleanup_ctx.append(_passthrough_session)
+    if scrobbler is not None:
+
+        async def scrobbling(app: web.Application) -> AsyncIterator[None]:
+            tasks = [
+                asyncio.create_task(scrobbler.run()),
+                asyncio.create_task(watch(lambda: jukebox.poll(POLL_INTERVAL_S), POLL_INTERVAL_S)),
+            ]
+            yield
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        app.cleanup_ctx.append(scrobbling)
     add_remote_routes(app)
 
     async def healthz(request: web.Request) -> web.StreamResponse:

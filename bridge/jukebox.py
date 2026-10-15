@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import random
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -11,7 +12,8 @@ from typing import Any
 from aiohttp import web
 
 from bridge.log import clean, redact, song_label
-from bridge.player import Player, PlayerError, Track
+from bridge.player import LOOP_MODES, Player, PlayerError, QueueDesyncError, Track
+from bridge.scrobble import PlayTracker, Scrobbler
 from bridge.soap import UpnpError
 from bridge.wiim import REQUEST_ERRORS
 
@@ -81,13 +83,25 @@ class Jukebox:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
         wall: Callable[[], float] = time.time,
+        rng: random.Random | None = None,
+        scrobbler: Scrobbler | None = None,
     ) -> None:
         self._player = player
         self._lookup = lookup
         self._sleep = sleep
         self._clock = clock
         self._wall = wall
+        self._rng = rng if rng is not None else random.Random()
+        self._scrobbler = scrobbler
+        self._plays = PlayTracker() if scrobbler is not None else None
+        self.lock = asyncio.Lock()
+        self._synced_at = float("-inf")
+        self._queue_id = 0
         self.songs: list[Mapping[str, Any]] = []
+        self._keys: list[int] = []
+        self._next_key = 0
+        self.shuffle = False
+        self.repeat = "off"
         self._seen: dict[str, Mapping[str, Any]] = {}
         self.current = 0
         self.gain = 0.5
@@ -108,6 +122,10 @@ class Jukebox:
             "stop": self._stop,
             "skip": self._skip,
             "add": self._add,
+            "insert": self._insert,
+            "move": self._noop,
+            "setShuffle": self._noop,
+            "setRepeat": self._noop,
             "clear": self._clear,
             "remove": self._remove,
             "shuffle": self._shuffle,
@@ -123,6 +141,9 @@ class Jukebox:
         offset: int | None,
         gain: float | None,
         mute: bool | None = None,
+        to_index: int | None = None,
+        shuffle: bool | None = None,
+        repeat: str | None = None,
     ) -> dict[str, Any]:
         if action not in self._actions:
             raise JukeboxError(0, "unknown action")
@@ -131,6 +152,12 @@ class Jukebox:
                 await self._sync()
             if action == "setMute":
                 await self._set_mute(mute)
+            elif action == "move":
+                await self._move(index, to_index)
+            elif action == "setShuffle":
+                await self._set_shuffle(shuffle)
+            elif action == "setRepeat":
+                await self._set_repeat(repeat)
             else:
                 await self._actions[action](ids, index, offset, gain)
         except JukeboxError:
@@ -181,6 +208,8 @@ class Jukebox:
             "position": self.position,
             "positionMs": self._position_now_ms(),
             "muted": self.muted,
+            "shuffle": self.shuffle,
+            "repeat": self.repeat,
             "queueVersion": f"{self._boot_id}:{self._queue_version}",
         }
 
@@ -192,13 +221,57 @@ class Jukebox:
     def _tracks(self) -> list[Track]:
         return [track_from_song(song) for song in self.songs]
 
+    def _new_keys(self, count: int) -> list[int]:
+        keys = list(range(self._next_key, self._next_key + count))
+        self._next_key += count
+        return keys
+
+    def _replace_queue(self, songs: list[Mapping[str, Any]]) -> None:
+        self._queue_id += 1
+        self.songs = songs
+        self._next_key = 0
+        self._keys = self._new_keys(len(songs))
+        self.shuffle = False
+
+    async def poll(self, max_age: float) -> bool:
+        """Sync with the device unless a request did so less than max_age seconds ago."""
+        async with self.lock:
+            if not self.loaded or self._clock() - self._synced_at < max_age:
+                return False
+            await self._sync()
+            return True
+
+    def _feed_plays(self, position_s: float | None) -> None:
+        if self._plays is None or self._scrobbler is None:
+            return
+        try:
+            if position_s is None or not 0 <= self.current < len(self.songs):
+                events = self._plays.feed(None, None, False, 0.0, self._wall())
+            else:
+                entry = (self._queue_id, self._keys[self.current])
+                song = self.songs[self.current]
+                events = self._plays.feed(entry, song, self.playing, position_s, self._wall())
+            self._scrobbler.submit(events)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("play tracking failed: %s", type(exc).__name__)
+
+    def _end_play(self) -> None:
+        if self._plays is None or self._scrobbler is None:
+            return
+        try:
+            self._scrobbler.submit(self._plays.end(self._wall()))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("play tracking failed: %s", type(exc).__name__)
+
     async def _sync(self) -> None:
         status = await self._player.refresh()
+        self._synced_at = self._clock()
         if status.volume is not None:
             self.gain = status.volume / 100
         if status.muted is not None:
             self.muted = status.muted
         if not self.loaded:
+            self._feed_plays(None)
             return
         if not status.in_control:
             logger.warning("lost control of the device queue")
@@ -206,6 +279,7 @@ class Jukebox:
             self.playing = False
             self._seek_hold = None
             self._set_position(0)
+            self._feed_plays(None)
             return
         previous = self.current
         if status.index is not None:
@@ -214,6 +288,7 @@ class Jukebox:
         self.position = int(status.position_s)
         self._position_ms = round(status.position_s * 1000)
         self._position_at = status.sampled_at
+        self._feed_plays(status.position_s)
         self._apply_seek_hold(previous)
 
     def _apply_seek_hold(self, previous_index: int) -> None:
@@ -305,7 +380,8 @@ class Jukebox:
         self._remember(songs)
         if self.loaded:
             await self._player.clear()
-        self.songs = songs
+        self._end_play()
+        self._replace_queue(songs)
         self._songs_changed()
         self._seek_hold = None
         self.current = 0
@@ -316,9 +392,26 @@ class Jukebox:
     async def _add(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         songs = await self._lookup_all(ids)
         self._remember(songs)
+        await self._append_songs(songs)
+
+    async def _append_songs(self, songs: list[Mapping[str, Any]]) -> None:
         if self.loaded:
             await self._player.append([track_from_song(song) for song in songs])
         self.songs.extend(songs)
+        self._keys.extend(self._new_keys(len(songs)))
+        self._songs_changed()
+
+    async def _insert(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
+        songs = await self._lookup_all(ids)
+        self._remember(songs)
+        if not self.songs:
+            await self._append_songs(songs)
+            return
+        after = self.current + 1
+        if self.loaded:
+            await self._player.insert_next([track_from_song(song) for song in songs])
+        self.songs[after:after] = songs
+        self._keys[after:after] = self._new_keys(len(songs))
         self._songs_changed()
 
     async def _start(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
@@ -364,6 +457,7 @@ class Jukebox:
         target = self._require_index(index)
         if self.loaded and target == self.current:
             await self._player.clear()
+            self._end_play()
             self.loaded = False
             self.playing = False
             self._seek_hold = None
@@ -371,6 +465,7 @@ class Jukebox:
         elif self.loaded:
             await self._player.remove(target)
         del self.songs[target]
+        del self._keys[target]
         self._songs_changed()
         if target < self.current:
             self.current -= 1
@@ -379,13 +474,86 @@ class Jukebox:
     async def _clear(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         if self.loaded:
             await self._player.clear()
-        self.songs = []
+        self._end_play()
+        self._replace_queue([])
         self._songs_changed()
         self._seek_hold = None
         self.current = 0
         self.loaded = False
         self.playing = False
         self._set_position(0)
+
+    async def _move(self, index: int | None, to_index: int | None) -> None:
+        if index is None:
+            raise JukeboxError(10, "Required parameter is missing: index")
+        if to_index is None:
+            raise JukeboxError(10, "Required parameter is missing: toIndex")
+        source = self._require_index(index)
+        target = self._require_index(to_index)
+        if source == target:
+            return
+        if source == self.current:
+            raise JukeboxError(0, "cannot move the playing track")
+        playing_key = self._keys[self.current]
+        if self.loaded:
+            await self._player.move(source, target)
+        self.songs.insert(target, self.songs.pop(source))
+        self._keys.insert(target, self._keys.pop(source))
+        self.current = self._keys.index(playing_key)
+        self._songs_changed()
+
+    async def _set_shuffle(self, enabled: bool | None) -> None:
+        if enabled is None:
+            raise JukeboxError(10, "Required parameter is missing: shuffle")
+        if not enabled and not self.shuffle:
+            return
+        first = self.current + 1
+        upcoming = list(range(first, len(self.songs)))
+        order = list(upcoming)
+        if enabled:
+            self._rng.shuffle(order)
+        else:
+            order.sort(key=self._keys.__getitem__)
+        if order == upcoming:
+            self.shuffle = enabled
+            return
+        songs = [self.songs[i] for i in order]
+        keys = [self._keys[i] for i in order]
+        desynced = False
+        if self.loaded:
+            try:
+                await self._player.replace_upcoming([track_from_song(song) for song in songs])
+            except QueueDesyncError as exc:
+                logger.warning(
+                    "reorder left the device queue out of step, reloading it: %s",
+                    redact(str(exc.__cause__ or exc)),
+                )
+                desynced = True
+        self.songs[first:] = songs
+        self._keys[first:] = keys
+        self.shuffle = enabled
+        self._songs_changed()
+        if desynced:
+            await self._reload_queue()
+
+    async def _set_repeat(self, repeat: str | None) -> None:
+        if repeat is None:
+            raise JukeboxError(10, "Required parameter is missing: repeat")
+        if repeat not in LOOP_MODES:
+            raise JukeboxError(10, "Invalid parameter: repeat")
+        await self._player.set_repeat(repeat)
+        self.repeat = repeat
+
+    async def _reload_queue(self) -> None:
+        try:
+            await self._player.load(self._tracks(), start=self.current, play=self.playing)
+            if self.playing and self.position > 0:
+                await self._seek_when_playing(self.current, self.position)
+        except (UpnpError, PlayerError, ValueError, *REQUEST_ERRORS):
+            self.loaded = False
+            self.playing = False
+            self._seek_hold = None
+            raise
 
     async def _shuffle(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         raise JukeboxError(0, "shuffle is not supported")
@@ -414,15 +582,24 @@ def _parse_int(params: Mapping[str, str], name: str) -> int | None:
         raise JukeboxError(10, f"Invalid parameter: {name}") from None
 
 
-def _parse_mute(params: Mapping[str, str]) -> bool | None:
-    if "mute" not in params:
+def _parse_bool(params: Mapping[str, str], name: str) -> bool | None:
+    if name not in params:
         return None
-    value = params["mute"].strip().lower()
+    value = params[name].strip().lower()
     if value in ("true", "1"):
         return True
     if value in ("false", "0"):
         return False
-    raise JukeboxError(10, "Invalid parameter: mute")
+    raise JukeboxError(10, f"Invalid parameter: {name}")
+
+
+def _parse_repeat(params: Mapping[str, str]) -> str | None:
+    if "repeat" not in params:
+        return None
+    value = params["repeat"].strip().lower()
+    if value not in LOOP_MODES:
+        raise JukeboxError(10, "Invalid parameter: repeat")
+    return value
 
 
 def _parse_gain(params: Mapping[str, str]) -> float | None:
@@ -455,8 +632,6 @@ async def _collect(request: web.Request) -> tuple[dict[str, str], list[str]]:
 def add_jukebox_routes(
     app: web.Application, jukebox: Jukebox, authenticate: Authenticator
 ) -> None:
-    lock = asyncio.Lock()
-
     def reply(envelope: dict[str, Any]) -> web.Response:
         return web.json_response(envelope, headers=CORS_ORIGIN)
 
@@ -472,9 +647,14 @@ def add_jukebox_routes(
             index = _parse_int(params, "index")
             offset = _parse_int(params, "offset")
             gain = _parse_gain(params)
-            mute = _parse_mute(params)
-            async with lock:
-                payload = await jukebox.handle(action, ids, index, offset, gain, mute)
+            to_index = _parse_int(params, "toIndex")
+            mute = _parse_bool(params, "mute")
+            shuffle = _parse_bool(params, "shuffle")
+            repeat = _parse_repeat(params)
+            async with jukebox.lock:
+                payload = await jukebox.handle(
+                    action, ids, index, offset, gain, mute, to_index, shuffle, repeat
+                )
         except JukeboxError as exc:
             if exc.code == WRONG_LOGIN:
                 logger.info("jukebox rejected login")
@@ -486,13 +666,17 @@ def add_jukebox_routes(
                     redact(exc.message),
                 )
             return reply(error_envelope(exc.code, exc.message))
-        suffix = ""
+        suffix = "".join(
+            f" {name}={value}"
+            for name, value in (("toIndex", to_index), ("shuffle", shuffle), ("repeat", repeat))
+            if value is not None
+        )
         if action in ("skip", "start"):
             label = jukebox.current_label()
-            suffix = f' track="{label}"' if label is not None else ""
-        elif action in ("set", "add") and ids:
+            suffix += f' track="{label}"' if label is not None else ""
+        elif action in ("set", "add", "insert") and ids:
             described = jukebox.describe(ids[0])
-            suffix = f' first="{described[0]}"' if described is not None else ""
+            suffix += f' first="{described[0]}"' if described is not None else ""
         logger.log(
             logging.DEBUG if action in QUIET_ACTIONS else logging.INFO,
             "jukebox action=%s index=%s offset=%s ids=%d gain=%s mute=%s%s",

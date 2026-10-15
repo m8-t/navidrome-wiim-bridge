@@ -337,6 +337,7 @@ class Wiim:
         return await self._queue_call("SetQueueLoopMode", {"LoopMode": str(mode)})
 
     async def queue_remove(self, name: str, start: int, end: int) -> str:
+        """Remove track `start` (1-based); the device ignores `end` (verified 2026-10-16)."""
         return await self._queue_call(
             "RemoveTracksInQueue",
             {

@@ -1,17 +1,26 @@
 """Bridge-side play queue mirrored onto the WiiM device queue."""
 
+import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from bridge.soap import UpnpError
-from bridge.wiim import QueueTrack, Wiim, build_queue_context
+from bridge.wiim import REQUEST_ERRORS, QueueTrack, Wiim, build_queue_context
+
+logger = logging.getLogger("bridge.player")
 
 DEVICE_QUEUE_URIS = (None, "", "SONGLIST-NETWORK")
 PLAYING_STATES = ("PLAYING", "TRANSITIONING")
+APPEND_BATCH = 50
+LOOP_MODES = {"off": 4, "all": 0, "one": 1}
 
 
 class PlayerError(Exception):
     """Raised when an operation does not fit the player's current state."""
+
+
+class QueueDesyncError(PlayerError):
+    """The device queue was changed and the rest of the edit failed; reload it."""
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,8 @@ class Player:
         self._tracks: list[Track] = []
         self._index: int | None = None
         self._in_control = False
+        self._repeat = "off"
+        self._loop_mode_applied = False
 
     @property
     def tracks(self) -> tuple[Track, ...]:
@@ -86,11 +97,30 @@ class Player:
         if not self._tracks:
             raise PlayerError("no queue loaded")
 
+    async def set_repeat(self, repeat: str) -> None:
+        if repeat not in LOOP_MODES:
+            raise ValueError(f"unknown repeat mode {repeat!r}")
+        await self._wiim.queue_set_loop_mode(LOOP_MODES[repeat])
+        self._repeat = repeat
+        self._loop_mode_applied = True
+
+    async def _apply_loop_mode(self) -> None:
+        if self._loop_mode_applied:
+            return
+        try:
+            await self.set_repeat(self._repeat)
+        except (UpnpError, *REQUEST_ERRORS) as exc:
+            logger.warning(
+                "could not set the device loop mode, retrying at the next load: %s",
+                str(exc) or type(exc).__name__,
+            )
+
     async def load(self, tracks: Sequence[Track], start: int = 0, play: bool = True) -> None:
         if not tracks:
             raise ValueError("no tracks to load")
         if not 0 <= start < len(tracks):
             raise ValueError(f"start {start} out of range")
+        await self._apply_loop_mode()
         try:
             await self._wiim.queue_delete(self._queue_name)
         except UpnpError:
@@ -124,6 +154,42 @@ class Player:
         context = build_queue_context(self._queue_name, self._queue_tracks(tracks))
         await self._wiim.queue_append(context, start_index=len(self._tracks))
         self._tracks.extend(tracks)
+
+    async def insert_next(self, tracks: Sequence[Track]) -> None:
+        self._require_queue()
+        if self._index is None:
+            raise PlayerError("no playing track")
+        if not tracks:
+            return
+        context = build_queue_context(self._queue_name, self._queue_tracks(tracks))
+        await self._wiim.queue_insert(context, after_index=self._index + 1, play=False)
+        self._tracks[self._index + 1 : self._index + 1] = tracks
+
+    async def replace_upcoming(self, tracks: Sequence[Track]) -> None:
+        self._require_queue()
+        if self._index is None:
+            raise PlayerError("no playing track")
+        keep = self._index + 1
+        if len(tracks) != len(self._tracks) - keep:
+            raise ValueError("replacement must have as many tracks as the upcoming part")
+        if not tracks:
+            return
+        total = len(self._tracks)
+        for position in range(total, keep, -1):
+            try:
+                await self._wiim.queue_remove(self._queue_name, position, position)
+            except UpnpError as exc:
+                if position == total:
+                    raise
+                raise QueueDesyncError("device queue is incomplete after the reorder") from exc
+            except REQUEST_ERRORS as exc:
+                raise QueueDesyncError("device may have removed upcoming tracks") from exc
+            self._tracks.pop()
+        try:
+            for start in range(0, len(tracks), APPEND_BATCH):
+                await self.append(tracks[start : start + APPEND_BATCH])
+        except Exception as exc:
+            raise QueueDesyncError("device queue is incomplete after the reorder") from exc
 
     async def remove(self, index: int) -> None:
         self._check_index(index)
