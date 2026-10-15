@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, nextPage, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, playCalls, addCalls,
   estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState,
@@ -12,9 +12,14 @@ const HIDDEN_POLL_MS = 3000;
 const TICK_MS = 500;
 const GAIN_HOLD_MS = 1500;
 const STATUS_MS = 4000;
-const SWIPE_FEEDBACK_PX = 8;
-const SWIPE_GAP_PX = 24;
-const SWIPE_ANIM_MS = 250;
+const FLOW_DRAG_PX = 8;
+const FLOW_ANIM_MS = 250;
+const FLOW_REACH = 3;
+const FLOW_SPACING_RATIO = 0.6;
+const FLOW_GUTTER_PX = 24;
+const FLOW_VELOCITY_MS = 100;
+const FLOW_CENTRE_SIZE = 600;
+const FLOW_SIDE_SIZE = 300;
 const PAGE_SIZE = 40;
 
 const $ = (id) => document.getElementById(id);
@@ -72,6 +77,7 @@ let needGesture = false;
 let metaKey = null;
 let lastPollAt = 0;
 let sheetReturnFocus = null;
+let flow = { el: null, tiles: [], position: null, spacing: 0, anim: null };
 let paging = { offset: 0, done: false, loading: false, observer: null, sentinel: null, grid: null };
 let libraryScroll = 0;
 
@@ -198,23 +204,22 @@ function setPlayIcon(button) {
   button.title = label;
 }
 
-function showCover(song) {
-  const cover = $("cover");
+function showBackdrop(song) {
   const backdrop = $("backdrop");
   if (song && song.coverArt) {
-    const url = coverUrl(song.coverArt, 600);
-    if (cover.getAttribute("src") !== url) cover.src = url;
+    const url = coverUrl(song.coverArt, FLOW_CENTRE_SIZE);
     if (backdrop.getAttribute("src") !== url) backdrop.src = url;
-    cover.hidden = false;
     backdrop.hidden = false;
-    $("cover-ph").hidden = true;
   } else {
-    cover.hidden = true;
-    cover.removeAttribute("src");
     backdrop.hidden = true;
     backdrop.removeAttribute("src");
-    $("cover-ph").hidden = false;
   }
+}
+
+function renderMeta(song) {
+  $("title").textContent = song ? song.title || "" : "";
+  $("artist").textContent = song ? song.artist || "" : "";
+  $("album").textContent = song ? song.album || "" : "";
 }
 
 function render() {
@@ -222,10 +227,11 @@ function render() {
   const hasQueue = entries.length > 0;
   $("empty").hidden = hasQueue;
   $("player-main").hidden = !hasQueue;
-  $("title").textContent = song ? song.title || "" : "";
-  $("artist").textContent = song ? song.artist || "" : "";
-  $("album").textContent = song ? song.album || "" : "";
-  if (!coverBusy) showCover(song);
+  showBackdrop(song);
+  if (!coverBusy) {
+    renderMeta(song);
+    syncFlow();
+  }
   const duration = song ? Number(song.duration) || 0 : 0;
   $("seek").max = String(duration);
   $("total").textContent = formatTime(duration);
@@ -413,123 +419,213 @@ function seekTo(seconds) {
   runCommands([{ action: "skip", index: status.currentIndex, offset: Math.floor(target) }]);
 }
 
-function bindCoverSwipe() {
-  const wrap = $("cover-wrap");
-  const main = [$("cover"), $("cover-ph")];
-  const ghost = $("cover-ghost");
-  const ghostImg = ghost.querySelector("img");
-  const ghostIcon = ghost.querySelector(".ic");
-  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let start = null;
-  let anim = null;
-  const place = (mainPx, ghostPx) => {
-    for (const node of main) node.style.transform = mainPx ? `translateX(${mainPx}px)` : "";
-    ghost.style.transform = ghostPx ? `translateX(${ghostPx}px)` : "";
-  };
-  const fillGhost = (song) => {
-    const art = song && song.coverArt;
-    if (art) {
-      const url = coverUrl(art, 600);
-      if (ghostImg.getAttribute("src") !== url) ghostImg.src = url;
-    } else {
-      ghostImg.removeAttribute("src");
+function makeTile() {
+  const tile = el("div", "tile");
+  const img = el("img");
+  img.alt = "";
+  img.draggable = false;
+  img.hidden = true;
+  const ph = el("span", "ic ph");
+  ph.append(icon("music"));
+  tile.append(img, ph);
+  tile.hidden = true;
+  return { tile, img, ph, index: -1, key: "", art: null, size: 0 };
+}
+
+function setTileSong(node, index, song, wanted) {
+  const key = `${song.id}|${song.coverArt || ""}`;
+  const changed = node.index !== index || node.key !== key;
+  node.index = index;
+  node.key = key;
+  const art = song.coverArt || null;
+  if (art !== node.art) {
+    node.art = art;
+    node.size = 0;
+  }
+  if (art && node.size < wanted) {
+    node.img.src = coverUrl(art, wanted);
+    node.size = wanted;
+  }
+  node.img.hidden = !art;
+  node.ph.hidden = Boolean(art);
+  node.tile.classList.toggle("centre", index === status.currentIndex);
+  return changed;
+}
+
+function paintTile(node, offset) {
+  const style = flowTileStyle(offset);
+  const { tile } = node;
+  tile.style.transform =
+    `translateX(${(style.x * flow.spacing).toFixed(1)}px) rotateY(${style.rotateY.toFixed(1)}deg) scale(${style.scale.toFixed(3)})`;
+  tile.style.opacity = String(style.opacity);
+  tile.style.zIndex = String(style.z);
+}
+
+function layoutFlow(position, from = position) {
+  if (!(flow.spacing > 0)) return;
+  const base = Math.round(position);
+  const jumped = [];
+  const live = new Set();
+  for (let i = base - FLOW_REACH; i <= base + FLOW_REACH; i++) {
+    if (i < 0 || i >= entries.length) continue;
+    const node = flow.tiles[((i % flow.tiles.length) + flow.tiles.length) % flow.tiles.length];
+    live.add(node);
+    const wanted = i === status.currentIndex ? FLOW_CENTRE_SIZE : FLOW_SIDE_SIZE;
+    if (setTileSong(node, i, entries[i], wanted) || node.tile.hidden) {
+      node.tile.hidden = false;
+      node.tile.style.transition = "none";
+      paintTile(node, i - from);
+      jumped.push(node);
     }
-    ghostImg.hidden = !art;
-    ghostIcon.hidden = Boolean(art);
-  };
-  const settle = () => {
-    wrap.classList.add("swiping");
-    place(0, 0);
-    coverBusy = false;
-    render();
-    ghost.hidden = true;
-    void wrap.offsetWidth;
-    wrap.classList.remove("swiping");
-  };
-  const animate = (mainPx, ghostPx) => {
-    let timer = null;
-    const finish = () => {
-      if (anim !== job) return;
-      anim = null;
-      clearTimeout(timer);
-      wrap.removeEventListener("transitionend", onEnd);
-      settle();
-    };
-    const onEnd = (event) => {
-      if (event.propertyName === "transform") finish();
-    };
-    const job = { finish };
-    anim = job;
-    wrap.classList.remove("swiping");
-    void wrap.offsetWidth;
-    place(mainPx, ghostPx);
-    wrap.addEventListener("transitionend", onEnd);
-    timer = setTimeout(finish, SWIPE_ANIM_MS + 100);
-  };
-  const abort = () => {
-    const drag = start;
-    start = null;
-    if (!drag || !drag.active) return;
-    animate(0, drag.side * drag.span);
+  }
+  for (const node of flow.tiles) {
+    if (live.has(node)) continue;
+    node.tile.hidden = true;
+    node.index = -1;
+    node.key = "";
+  }
+  if (jumped.length) {
+    void flow.el.offsetWidth;
+    for (const node of jumped) node.tile.style.transition = "";
+  }
+  for (const node of live) paintTile(node, node.index - position);
+  flow.position = position;
+}
+
+function clampedIndex() {
+  return Math.min(Math.max(status.currentIndex, 0), entries.length - 1);
+}
+
+function syncFlow() {
+  if (!entries.length) {
+    flow.position = null;
+    return;
+  }
+  const index = clampedIndex();
+  if (flow.position === null || !(flow.spacing > 0) || flow.position === index) layoutFlow(index);
+  else glideTo(index);
+}
+
+function finishGlide(redraw = true) {
+  if (!flow.anim) return;
+  const { timer, onEnd } = flow.anim;
+  flow.anim = null;
+  clearTimeout(timer);
+  flow.el.removeEventListener("transitionend", onEnd);
+  flow.el.classList.remove("animating");
+  coverBusy = false;
+  if (redraw) render();
+}
+
+function glideTo(index) {
+  finishGlide(false);
+  const from = flow.position ?? index;
+  coverBusy = true;
+  flow.el.classList.add("animating");
+  layoutFlow(index, from);
+  const instant = window.matchMedia("(prefers-reduced-motion: reduce)").matches || from === index;
+  const onEnd = (event) => { if (event.propertyName === "transform") finishGlide(); };
+  flow.anim = { onEnd, timer: setTimeout(() => finishGlide(), FLOW_ANIM_MS + 100) };
+  flow.el.addEventListener("transitionend", onEnd);
+  if (instant) finishGlide();
+}
+
+function goToIndex(index, { start = false } = {}) {
+  if (index !== status.currentIndex) {
+    status = { ...status, currentIndex: index, position: 0 };
+    polledAt = Date.now();
+    const calls = [{ action: "skip", index, offset: 0 }];
+    if (start && !status.playing) calls.push({ action: "start" });
+    runCommands(calls).then((ok) => {
+      if (!ok) poll();
+    });
+  }
+  renderMeta(entries[index] || null);
+  glideTo(index);
+}
+
+function measureFlow() {
+  const wrap = $("cover-wrap");
+  const size = Math.max(0, Math.min(wrap.clientWidth - 2 * FLOW_GUTTER_PX, wrap.clientHeight));
+  flow.spacing = size * FLOW_SPACING_RATIO;
+  flow.el.style.setProperty("--tile", `${size}px`);
+  if (size > 0 && entries.length && !coverBusy) layoutFlow(clampedIndex());
+}
+
+function bindCoverflow() {
+  const wrap = $("cover-wrap");
+  flow.el = $("flow");
+  flow.tiles = Array.from({ length: 2 * FLOW_REACH + 1 }, makeTile);
+  flow.el.append(...flow.tiles.map((node) => node.tile));
+  new ResizeObserver(measureFlow).observe(wrap);
+  let drag = null;
+  const nodeAt = (target) => flow.tiles.find((node) => node.tile === target.closest(".tile"));
+  const nearest = (position) => Math.min(Math.max(Math.round(position), 0), entries.length - 1);
+  const reset = () => {
+    const done = drag;
+    drag = null;
+    return done;
   };
   wrap.addEventListener("pointerdown", (event) => {
-    if (start || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
-    if (anim) anim.finish();
-    start = { id: event.pointerId, x: event.clientX, y: event.clientY, t: event.timeStamp, active: false };
+    if (drag || !event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+    finishGlide();
+    const node = nodeAt(event.target);
+    drag = {
+      id: event.pointerId, x: event.clientX, y: event.clientY, active: false, samples: [],
+      index: status.currentIndex, shown: status.currentIndex, tapped: node ? node.index : -1,
+    };
     wrap.setPointerCapture(event.pointerId);
   });
   wrap.addEventListener("pointermove", (event) => {
-    if (!start || event.pointerId !== start.id || reduced.matches) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (!start.active) {
-      if (Math.abs(dx) < SWIPE_FEEDBACK_PX || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
-      const visible = main.find((node) => !node.hidden);
-      start.width = visible.getBoundingClientRect().width;
-      start.span = start.width + SWIPE_GAP_PX;
-      start.side = 0;
-      start.active = true;
+    if (!drag || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.active) {
+      if (Math.abs(dx) < FLOW_DRAG_PX || Math.abs(dx) <= 1.5 * Math.abs(dy)) return;
+      drag.active = true;
       coverBusy = true;
-      wrap.classList.add("swiping");
+      flow.el.classList.remove("animating");
     }
-    const side = dx < 0 ? 1 : -1;
-    const index = swipeNeighbour(dx, status.currentIndex, entries.length);
-    const has = index !== null;
-    if (side !== start.side) {
-      start.side = side;
-      ghost.hidden = !has;
-      if (has) fillGhost(entries[index]);
+    const position = flowPosition(drag.index, dx, flow.spacing, entries.length);
+    drag.position = position;
+    drag.samples.push({ t: event.timeStamp, p: position });
+    while (drag.samples.length > 1 && event.timeStamp - drag.samples[0].t > 2 * FLOW_VELOCITY_MS) {
+      drag.samples.shift();
     }
-    place(swipeOffset(dx, has), has ? dx + side * start.span : 0);
+    layoutFlow(position);
+    const shown = nearest(position);
+    if (shown !== drag.shown) {
+      drag.shown = shown;
+      renderMeta(entries[shown]);
+    }
   });
   wrap.addEventListener("pointerup", (event) => {
-    if (!start || event.pointerId !== start.id) return;
-    const drag = start;
-    const dx = event.clientX - drag.x;
-    const action = swipeAction(
-      dx, event.clientY - drag.y, event.timeStamp - drag.t, drag.width || wrap.clientWidth,
-    );
-    const index = swipeTarget(action, status.currentIndex, entries.length);
-    if (index === null) return abort();
-    start = null;
-    status = { ...status, currentIndex: index, position: 0 };
-    polledAt = Date.now();
-    runCommands([{ action: "skip", index, offset: 0 }]).then((ok) => {
-      if (!ok) poll();
-    });
-    if (drag.active) animate(-drag.side * drag.span, 0);
-    else render();
+    if (!drag || event.pointerId !== drag.id) return;
+    const done = reset();
+    if (!done.active) {
+      const dx = event.clientX - done.x;
+      if (Math.abs(dx) < FLOW_DRAG_PX && done.tapped >= 0 && done.tapped !== status.currentIndex) {
+        gesture();
+        goToIndex(done.tapped, { start: true });
+      }
+      return;
+    }
+    const position = flowPosition(done.index, event.clientX - done.x, flow.spacing, entries.length);
+    done.samples.push({ t: event.timeStamp, p: position });
+    const velocity = flowVelocity(done.samples, event.timeStamp, FLOW_VELOCITY_MS);
+    goToIndex(flowTarget(position, velocity, entries.length));
   });
-  wrap.addEventListener("pointercancel", (event) => {
-    if (start && event.pointerId === start.id) abort();
-  });
-  wrap.addEventListener("lostpointercapture", (event) => {
-    if (start && event.pointerId === start.id) abort();
-  });
+  const abort = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const done = reset();
+    if (done.active) goToIndex(clampedIndex());
+  };
+  wrap.addEventListener("pointercancel", abort);
+  wrap.addEventListener("lostpointercapture", abort);
 }
 
 function bindPlayer() {
-  bindCoverSwipe();
+  bindCoverflow();
   $("play").addEventListener("click", togglePlay);
   $("mini-play").addEventListener("click", togglePlay);
   $("prev").addEventListener("click", goPrevious);

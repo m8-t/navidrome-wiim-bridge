@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, swipeAction, swipeTarget, swipeOffset, swipeNeighbour, nextPage,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -197,68 +197,83 @@ test("positionState", () => {
   assert.equal(positionState(5, undefined), null);
 });
 
-test("swipeAction", () => {
-  assert.equal(swipeAction(-100, 0, 200, 400), "next");
-  assert.equal(swipeAction(100, 0, 200, 400), "previous");
-  assert.equal(swipeAction(-59, 0, 200, 400), null);
-  assert.equal(swipeAction(-60, 0, 200, 400), "next");
-  assert.equal(swipeAction(60, 0, 200, 400), "previous");
-  assert.equal(swipeAction(10, 100, 200, 400), null);
-  assert.equal(swipeAction(-90, 61, 200, 400), null);
-  assert.equal(swipeAction(-90, 60, 200, 400), null);
-  assert.equal(swipeAction(-90, 59, 200, 400), "next");
-  assert.equal(swipeAction(-100, 0, 801, 400), null);
-  assert.equal(swipeAction(-100, 0, 800, 400), "next");
-  assert.equal(swipeAction(-40, 0, 200, 200), "next");
-  assert.equal(swipeAction(-39, 0, 200, 200), null);
-  assert.equal(swipeAction(-59, 0, 200, 0), null);
-  assert.equal(swipeAction(-60, 0, 200, 0), "next");
-  assert.equal(swipeAction(-59, 0, 200, NaN), null);
-  assert.equal(swipeAction(-60, 0, 200, NaN), "next");
-  assert.equal(swipeAction(NaN, 0, 200, 400), null);
-  assert.equal(swipeAction(-100, NaN, 200, 400), null);
-  assert.equal(swipeAction(-100, 0, NaN, 400), null);
+test("flowTileStyle centre and sides", () => {
+  assert.deepEqual(flowTileStyle(0), { x: 0, rotateY: 0, scale: 1, z: 100, opacity: 1 });
+  const right = flowTileStyle(1);
+  assert.equal(right.x, 1);
+  assert.ok(right.rotateY < 0);
+  assert.ok(right.scale < 1 && right.scale > 0.5);
+  assert.ok(right.z < 100);
+  const left = flowTileStyle(-1);
+  assert.ok(left.x < 0 && left.rotateY > 0);
 });
 
-test("swipeTarget", () => {
-  assert.equal(swipeTarget("next", 2, 5), 3);
-  assert.equal(swipeTarget("next", 4, 5), null);
-  assert.equal(swipeTarget("previous", 2, 5), 1);
-  assert.equal(swipeTarget("previous", 0, 5), null);
-  assert.equal(swipeTarget("next", 0, 0), null);
-  assert.equal(swipeTarget("previous", 3, 0), null);
-  assert.equal(swipeTarget("sideways", 2, 5), null);
-  assert.equal(swipeTarget(null, 2, 5), null);
+test("flowTileStyle mirrors and stays continuous", () => {
+  for (const o of [0.1, 0.5, 1, 1.4, 2, 2.75, 3, 3.5, 4]) {
+    const r = flowTileStyle(o);
+    const l = flowTileStyle(-o);
+    assert.equal(l.x, -r.x);
+    assert.equal(l.rotateY, -r.rotateY);
+    assert.equal(l.scale, r.scale);
+    assert.equal(l.z, r.z);
+    assert.equal(l.opacity, r.opacity);
+    assert.ok(Number.isInteger(r.z));
+  }
+  const eps = 1e-6;
+  for (const o of [0, 1, 3]) {
+    const a = flowTileStyle(o - eps);
+    const b = flowTileStyle(o + eps);
+    for (const key of ["x", "rotateY", "scale", "opacity"]) {
+      assert.ok(Math.abs(a[key] - b[key]) < 1e-3, `${key} jumps at ${o}`);
+    }
+  }
+  assert.equal(flowTileStyle(3.5).opacity, 0);
+  assert.equal(flowTileStyle(9).opacity, 0);
+  assert.equal(flowTileStyle(NaN).x, 0);
 });
 
-test("swipeAction long drags", () => {
-  assert.equal(swipeAction(-160, 0, 2000, 400), "next");
-  assert.equal(swipeAction(160, 0, 2000, 400), "previous");
-  assert.equal(swipeAction(-159, 0, 801, 400), null);
-  assert.equal(swipeAction(-160, 300, 2000, 400), null);
-  assert.equal(swipeAction(-1000, 900, 100, 400), null);
-  assert.equal(swipeAction(-1000, 900, 2000, 400), null);
-  assert.equal(swipeAction(-100, 0, 2000, 0), null);
+test("flowPosition follows the finger and rubber bands", () => {
+  assert.equal(flowPosition(4, 0, 200, 10), 4);
+  assert.equal(flowPosition(4, -100, 200, 10), 4.5);
+  assert.equal(flowPosition(4, 100, 200, 10), 3.5);
+  assert.equal(flowPosition(4, -400, 200, 10), 6);
+  assert.ok(Math.abs(flowPosition(0, 200, 200, 10) + 0.3) < 1e-9);
+  assert.ok(Math.abs(flowPosition(9, -200, 200, 10) - 9.3) < 1e-9);
+  assert.ok(Math.abs(flowPosition(0, 200, 200, 1) + 0.3) < 1e-9);
+  assert.ok(Math.abs(flowPosition(0, -200, 200, 1) - 0.3) < 1e-9);
+  assert.equal(flowPosition(3, 50, 0, 10), 3);
+  assert.equal(flowPosition(3, NaN, 200, 10), 3);
+  assert.equal(flowPosition(3, 50, 200, 0), 0);
 });
 
-test("swipeOffset", () => {
-  assert.equal(swipeOffset(-100, true), -100);
-  assert.equal(swipeOffset(100, true), 100);
-  assert.ok(Math.abs(swipeOffset(100, false) - 30) < 1e-9);
-  assert.ok(Math.abs(swipeOffset(-100, false) + 30) < 1e-9);
-  assert.equal(swipeOffset(0, false), 0);
+test("flowVelocity", () => {
+  const samples = [{ t: 0, p: 4 }, { t: 50, p: 4.5 }, { t: 100, p: 5 }];
+  assert.equal(flowVelocity(samples, 100), 10);
+  assert.equal(flowVelocity(samples, 150), 10);
+  assert.equal(flowVelocity(samples, 201), 0);
+  assert.equal(flowVelocity([], 100), 0);
+  assert.equal(flowVelocity([{ t: 10, p: 1 }], 10), 0);
+  assert.equal(flowVelocity([{ t: 10, p: 1 }, { t: 10, p: 2 }], 10), 0);
+  assert.equal(flowVelocity([{ t: 0, p: 1 }, { t: 400, p: 9 }], 400), 0);
+  assert.equal(flowVelocity([{ t: 0, p: 1 }, { t: 90, p: 0 }], 90), -1000 / 90);
 });
 
-test("swipeNeighbour", () => {
-  assert.equal(swipeNeighbour(-50, 2, 5), 3);
-  assert.equal(swipeNeighbour(50, 2, 5), 1);
-  assert.equal(swipeNeighbour(50, 0, 5), null);
-  assert.equal(swipeNeighbour(-50, 4, 5), null);
-  assert.equal(swipeNeighbour(-50, 0, 5), 1);
-  assert.equal(swipeNeighbour(50, 4, 5), 3);
-  assert.equal(swipeNeighbour(-50, 0, 0), null);
-  assert.equal(swipeNeighbour(0, 2, 5), null);
-  assert.equal(swipeNeighbour(NaN, 2, 5), null);
+test("flowTarget", () => {
+  assert.equal(flowTarget(4.2, 0, 10), 4);
+  assert.equal(flowTarget(4.6, 0, 10), 5);
+  assert.equal(flowTarget(3.4, 0, 10), 3);
+  assert.equal(flowTarget(4.3, 3, 10), 5);
+  assert.equal(flowTarget(4.1, 15, 10), 7);
+  assert.equal(flowTarget(4.1, -15, 10), 1);
+  assert.equal(flowTarget(4.3, 0.5, 10), 4);
+  assert.equal(flowTarget(8, 50, 10), 9);
+  assert.equal(flowTarget(1, -50, 10), 0);
+  assert.equal(flowTarget(-0.3, 0, 10), 0);
+  assert.equal(flowTarget(9.3, 0, 10), 9);
+  assert.equal(flowTarget(0.4, 0, 1), 0);
+  assert.equal(flowTarget(NaN, NaN, 10), 0);
+  assert.equal(flowTarget(4, Infinity, 10), 4);
+  assert.equal(flowTarget(4, 5, 0), 0);
 });
 
 test("nextPage", () => {

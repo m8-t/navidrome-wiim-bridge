@@ -26,40 +26,53 @@ export function nextTarget(index, length) {
   return index + 1 >= length ? null : index + 1;
 }
 
-const SWIPE_MIN_PX = 60;
-const SWIPE_MIN_FRACTION = 0.2;
-const SWIPE_HORIZONTAL_RATIO = 1.5;
-const SWIPE_MAX_MS = 800;
-const SWIPE_LONG_FRACTION = 0.4;
-const SWIPE_RUBBER = 0.3;
+const FLOW_RUBBER = 0.3;
+const FLOW_FLING_SEC = 0.2;
+const FLOW_ANGLE = 55;
 
-export function swipeAction(dx, dy, dtMs, width) {
-  if (![dx, dy, dtMs].every(Number.isFinite)) return null;
-  const threshold = Number.isFinite(width) && width > 0
-    ? Math.min(SWIPE_MIN_PX, width * SWIPE_MIN_FRACTION)
-    : SWIPE_MIN_PX;
-  if (Math.abs(dx) < threshold) return null;
-  if (!(Math.abs(dx) > SWIPE_HORIZONTAL_RATIO * Math.abs(dy))) return null;
-  const long = Number.isFinite(width) && width > 0 && Math.abs(dx) >= width * SWIPE_LONG_FRACTION;
-  if (dtMs > SWIPE_MAX_MS && !long) return null;
-  return dx < 0 ? "next" : "previous";
+const clampIndex = (value, length) => Math.min(Math.max(value, 0), length - 1) || 0;
+const finiteOr = (value, fallback) => (Number.isFinite(value) ? value : fallback);
+
+export function flowTileStyle(offset) {
+  const o = finiteOr(offset, 0);
+  const a = Math.abs(o);
+  const side = Math.sign(o);
+  let opacity = 1;
+  if (a > 3) opacity = Math.max(0, 0.5 - (a - 3));
+  else if (a > 1) opacity = 1 - 0.25 * (a - 1);
+  return {
+    x: side * (Math.min(a, 1) + 0.5 * Math.max(a - 1, 0)) || 0,
+    rotateY: -side * FLOW_ANGLE * Math.min(a, 1) || 0,
+    scale: 1 - 0.25 * Math.min(a, 1) - 0.05 * Math.max(a - 1, 0),
+    z: Math.round(100 - a * 10),
+    opacity,
+  };
 }
 
-export function swipeOffset(dx, hasNeighbour) {
-  return hasNeighbour ? dx : dx * SWIPE_RUBBER;
+export function flowPosition(index, dx, spacing, length) {
+  if (!(length > 0)) return 0;
+  const last = length - 1;
+  const base = clampIndex(finiteOr(index, 0), length);
+  if (!(spacing > 0) || !Number.isFinite(dx)) return base;
+  const raw = base - dx / spacing;
+  if (raw < 0) return raw * FLOW_RUBBER;
+  if (raw > last) return last + (raw - last) * FLOW_RUBBER;
+  return raw;
 }
 
-export function swipeNeighbour(dx, index, length) {
-  if (!(length > 0) || !Number.isFinite(dx) || dx === 0) return null;
-  const target = dx < 0 ? index + 1 : index - 1;
-  return target >= 0 && target < length ? target : null;
+export function flowVelocity(samples, now, windowMs = 100) {
+  const last = samples[samples.length - 1];
+  if (!last || !(now - last.t <= windowMs)) return 0;
+  const first = samples.find((s) => last.t - s.t <= windowMs);
+  const dt = last.t - first.t;
+  if (!(dt > 0)) return 0;
+  return finiteOr(((last.p - first.p) / dt) * 1000, 0);
 }
 
-export function swipeTarget(action, index, length) {
-  if (!(length > 0)) return null;
-  if (action === "next") return nextTarget(index, length);
-  if (action === "previous") return index <= 0 ? null : index - 1;
-  return null;
+export function flowTarget(position, velocity, length) {
+  if (!(length > 0)) return 0;
+  const projected = finiteOr(position, 0) + finiteOr(velocity, 0) * FLOW_FLING_SEC;
+  return clampIndex(Math.round(projected), length);
 }
 
 export function nextPage(state, receivedCount, pageSize) {

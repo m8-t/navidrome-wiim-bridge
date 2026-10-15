@@ -26,6 +26,16 @@ Each release is published as a container image:
 
 ### Changed
 
+- Player page: the single cover with its carousel swipe is replaced by a coverflow over
+  the whole queue. The current track sits in the middle at full size, up to three
+  tracks on each side are tilted and overlap behind it, one tile per queue entry even
+  when all tracks share one cover. The flow follows the finger one to one, title,
+  artist and album switch with the tile nearest the middle, and a fast fling can pass
+  several tracks. Letting go sends a single skip to the track you land on. Dragging
+  right always goes to the previous track, a short or slow drag springs back, and
+  tapping a side tile jumps to it. Only transform and opacity are animated, so it stays
+  smooth on slow tablets. On a tablet in landscape the flow spans the full width above
+  centred controls; on a phone the neighbours peek in from the edges.
 - `BRIDGE_NAVIDROME_URL` in the example ConfigMap now points at the Navidrome Service
   from the same folder (`http://navidrome:4533`).
 
