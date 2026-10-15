@@ -10,6 +10,11 @@ Each release is published as a container image:
 
 ## [Unreleased]
 
+### Added
+
+- The Random mix sheet has a switch to leave out intros, outros, skits and interludes. It
+  fetches extra random songs when the filter leaves the mix short.
+
 ### Fixed
 
 - Skipping, play/pause, seek and volume on the remote page no longer wait until a long

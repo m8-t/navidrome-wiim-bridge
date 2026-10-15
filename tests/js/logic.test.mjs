@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, needsRefresh, reconcilePosition,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, isInterlude, collectMix, needsRefresh, reconcilePosition,
   needsEntries, isAddOnly, isBarrier, createLanes,
 } from "../../bridge/remote/logic.js";
 
@@ -487,4 +487,54 @@ test("lanes: a failing batch does not wedge its lane", async () => {
   await assert.rejects(failed);
   assert.equal(await lanes.schedule(SKIP, async () => true), true);
   assert.equal(lanes.pendingMain(), 0);
+});
+
+test("isInterlude matches whole words only", () => {
+  for (const t of ["Intro", "intro", "Outro (feat. X)", "Skit", "Interlude: Love", "The Interlude", "Intro - Live", "Skit #2", "Interludes of Sorrow", "SKITS", "Outros", "Éxito Intro"]) {
+    assert.equal(isInterlude(t), true, t);
+  }
+  for (const t of ["Introduction", "Outrospective", "Skittles", "Retro", "Intron", "Éintro", "intro2", "", null, undefined, 5]) {
+    assert.equal(isInterlude(t), false, String(t));
+  }
+});
+
+const pool = (prefix, n, bad = 0) =>
+  Array.from({ length: n }, (_, i) => ({ id: `${prefix}${i}`, title: i < bad ? "Skit" : `Song ${prefix}${i}` }));
+
+test("collectMix without the option fetches once and merges as before", async () => {
+  let calls = 0;
+  const lists = [pool("a", 6, 3), pool("b", 4)];
+  const { songs, short } = await collectMix(async () => (calls++, lists), 5, false, seeded(3));
+  assert.equal(calls, 1);
+  assert.equal(short, false);
+  assert.deepEqual(songs, mergeRandom(lists, 5, seeded(3)));
+});
+
+test("collectMix filters and tops up until count is reached", async () => {
+  let round = 0;
+  const fetchRound = async () => [pool(`r${round++}_`, 10, 5)];
+  const { songs, short } = await collectMix(fetchRound, 8, true, seeded(1));
+  assert.equal(round, 2);
+  assert.equal(songs.length, 8);
+  assert.equal(short, false);
+  assert.ok(songs.every((s) => !isInterlude(s.title)));
+  assert.equal(new Set(songs.map((s) => s.id)).size, 8);
+});
+
+test("collectMix gives up after three extra rounds and reports short", async () => {
+  let round = 0;
+  const fetchRound = async () => [pool(`r${round++}_`, 4, 3)];
+  const { songs, short } = await collectMix(fetchRound, 50, true, seeded(1));
+  assert.equal(round, 4);
+  assert.equal(songs.length, 4);
+  assert.equal(short, true);
+});
+
+test("collectMix dedupes across rounds and stops when nothing new arrives", async () => {
+  let round = 0;
+  const same = [pool("x", 5, 1), pool("y", 2)];
+  const { songs, short } = await collectMix(async () => (round++, same), 20, true);
+  assert.equal(round, 2);
+  assert.equal(songs.length, 6);
+  assert.equal(short, true);
 });

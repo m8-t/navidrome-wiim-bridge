@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, collectMix, playCalls, addCalls,
   estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
@@ -1084,7 +1084,7 @@ function closeSheet(restoreFocus = true) {
 }
 
 function loadMixChoice() {
-  const fallback = { count: 500, fromYear: "", toYear: "", genres: [] };
+  const fallback = { count: 500, fromYear: "", toYear: "", genres: [], skipInterludes: false };
   try {
     const data = JSON.parse(localStorage.getItem(MIX_KEY));
     if (!data || typeof data !== "object") return fallback;
@@ -1093,6 +1093,7 @@ function loadMixChoice() {
       fromYear: String(data.fromYear ?? ""),
       toYear: String(data.toYear ?? ""),
       genres: Array.isArray(data.genres) ? data.genres.filter((g) => typeof g === "string") : [],
+      skipInterludes: data.skipInterludes === true,
     };
   } catch {
     return fallback;
@@ -1114,6 +1115,7 @@ function readMixChoice() {
     fromYear: $("mix-from").value.trim(),
     toYear: $("mix-to").value.trim(),
     genres: [...document.querySelectorAll("#mix-genres [aria-pressed='true']")].map((b) => b.dataset.genre),
+    skipInterludes: $("mix-skip").checked,
   };
 }
 
@@ -1159,6 +1161,7 @@ function openMix() {
   }
   $("mix-from").value = choice.fromYear;
   $("mix-to").value = choice.toYear;
+  $("mix-skip").checked = choice.skipInterludes;
   showSheet($("mix-sheet"));
   loadGenres(choice.genres);
 }
@@ -1179,15 +1182,19 @@ async function playMix() {
   try {
     const base = { count: choice.count, fromYear: choice.fromYear, toYear: choice.toYear };
     const genres = choice.genres.length ? choice.genres : [undefined];
-    const lists = await Promise.all(genres.map((genre) => fetchRandom(randomSongParams({ ...base, genre }))));
-    const songs = mergeRandom(lists, choice.count);
+    const { songs, short } = await collectMix(
+      () => Promise.all(genres.map((genre) => fetchRandom(randomSongParams({ ...base, genre })))),
+      choice.count,
+      choice.skipInterludes,
+    );
     if (!songs.length) {
       showStatus("No songs match these filters");
       return;
     }
     const calls = mixCalls(songs.map((song) => song.id));
     if (!(await runCommands(calls.slice(0, MIX_HEAD_CALLS)))) return;
-    hideStatus();
+    if (short) showStatus(`Mix has ${songs.length} songs (interludes skipped)`, true);
+    else hideStatus();
     closeSheet();
     setTab("player");
     if (calls.length > MIX_HEAD_CALLS) runCommands(calls.slice(MIX_HEAD_CALLS));

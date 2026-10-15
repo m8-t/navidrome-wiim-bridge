@@ -259,6 +259,36 @@ export function mergeRandom(lists, count, rng = Math.random) {
   return songs.slice(0, Math.max(0, count));
 }
 
+const INTERLUDE_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude)s?(?![\p{L}\p{N}])/iu;
+
+export function isInterlude(title) {
+  return typeof title === "string" && INTERLUDE_RE.test(title);
+}
+
+export const MIX_EXTRA_ROUNDS = 3;
+
+export async function collectMix(fetchRound, count, skipInterludes, rng = Math.random) {
+  const first = await fetchRound();
+  if (!skipInterludes) return { songs: mergeRandom(first, count, rng), short: false };
+  const seen = new Set();
+  const kept = [];
+  const take = (lists) => {
+    let fresh = 0;
+    for (const song of lists.flat()) {
+      if (seen.has(song.id)) continue;
+      seen.add(song.id);
+      fresh++;
+      if (!isInterlude(song.title)) kept.push(song);
+    }
+    return fresh;
+  };
+  take(first);
+  for (let round = 0; round < MIX_EXTRA_ROUNDS && kept.length < count; round++) {
+    if (!take(await fetchRound())) break;
+  }
+  return { songs: mergeRandom([kept], count, rng), short: kept.length < count };
+}
+
 const REFRESHING_ACTIONS = new Set(["set", "add", "remove", "clear"]);
 
 export function needsRefresh(calls) {
