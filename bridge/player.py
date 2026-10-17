@@ -1,7 +1,8 @@
 """Bridge-side play queue mirrored onto the WiiM device queue."""
 
+import asyncio
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from bridge.soap import UpnpError
@@ -13,6 +14,8 @@ DEVICE_QUEUE_URIS = (None, "", "SONGLIST-NETWORK")
 PLAYING_STATES = ("PLAYING", "TRANSITIONING")
 APPEND_BATCH = 50
 LOOP_MODES = {"off": 4, "all": 0, "one": 1}
+TRANSITION_NOT_ALLOWED = 701
+RETRY_701_S = 0.3
 
 
 class PlayerError(Exception):
@@ -51,10 +54,13 @@ class Player:
         url_for: Callable[[str], str],
         queue_name: str = "bridge",
         max_volume: int = 100,
+        *,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if not 0 <= max_volume <= 100:
             raise ValueError("max_volume must be between 0 and 100")
         self._max_volume = max_volume
+        self._sleep = sleep
         self._wiim = wiim
         self._url_for = url_for
         self._queue_name = queue_name
@@ -96,6 +102,16 @@ class Player:
     def _require_queue(self) -> None:
         if not self._tracks:
             raise PlayerError("no queue loaded")
+
+    async def _retry_701(self, label: str, call: Callable[[], Awaitable[object]]) -> None:
+        try:
+            await call()
+        except UpnpError as exc:
+            if exc.code != TRANSITION_NOT_ALLOWED:
+                raise
+            logger.info("device answered %s with 701 Transition not allowed, retrying once", label)
+            await self._sleep(RETRY_701_S)
+            await call()
 
     async def set_repeat(self, repeat: str) -> None:
         if repeat not in LOOP_MODES:
@@ -144,7 +160,9 @@ class Player:
     async def play_index(self, index: int) -> None:
         self._require_queue()
         self._check_index(index)
-        await self._wiim.queue_play(self._queue_name, index + 1)
+        await self._retry_701(
+            "play_index", lambda: self._wiim.queue_play(self._queue_name, index + 1)
+        )
         self._index = index
 
     async def append(self, tracks: Sequence[Track]) -> None:
@@ -214,10 +232,10 @@ class Player:
             self._index = next(i for i, t in enumerate(self._tracks) if t is current)
 
     async def pause(self) -> None:
-        await self._wiim.pause()
+        await self._retry_701("pause", self._wiim.pause)
 
     async def resume(self) -> None:
-        await self._wiim.play()
+        await self._retry_701("resume", self._wiim.play)
 
     async def stop(self) -> None:
         await self._wiim.stop()
@@ -231,7 +249,7 @@ class Player:
     async def seek(self, seconds: int) -> None:
         if seconds < 0:
             raise ValueError("seconds must not be negative")
-        await self._wiim.seek(seconds)
+        await self._retry_701("seek", lambda: self._wiim.seek(seconds))
 
     async def set_volume(self, volume: int) -> int:
         clamped = min(max(volume, 0), self._max_volume)

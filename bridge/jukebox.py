@@ -15,12 +15,13 @@ from bridge.log import clean, redact, song_label
 from bridge.player import LOOP_MODES, Player, PlayerError, QueueDesyncError, Track
 from bridge.scrobble import PlayTracker, Scrobbler
 from bridge.soap import UpnpError
+from bridge.subsonic import AuthResult
 from bridge.wiim import REQUEST_ERRORS
 
 logger = logging.getLogger("bridge.jukebox")
 
 SongLookup = Callable[[str], Awaitable[Mapping[str, Any] | None]]
-Authenticator = Callable[[Mapping[str, str]], Awaitable[bool]]
+Authenticator = Callable[[Mapping[str, str]], Awaitable[AuthResult]]
 
 ENVELOPE_BASE = {
     "version": "1.16.1",
@@ -29,7 +30,15 @@ ENVELOPE_BASE = {
     "openSubsonic": True,
 }
 WRONG_LOGIN = 40
+UNREACHABLE_MESSAGE = "Navidrome is unreachable, try again shortly"
 QUIET_ACTIONS = frozenset({"get", "status"})
+POLL_ACTIONS = frozenset({"get", "status"})
+SYNC_REUSE_S = 1.0
+SONG_ACTIONS = frozenset({"set", "add", "insert"})
+EDIT_ACTIONS = frozenset({"set", "add", "insert", "remove", "move", "clear", "setShuffle"})
+MAX_IDS_PER_CALL = 500
+MAX_QUEUE = 1000
+LOOKUP_CONCURRENCY = 8
 PATHS = ("/rest/jukeboxControl", "/rest/jukeboxControl.view")
 MEMORY_SIZE = 500
 SEEK_WAIT_STEP = 0.25
@@ -53,6 +62,24 @@ class JukeboxError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _check_room(kept: int, incoming: int) -> None:
+    if kept + incoming > MAX_QUEUE:
+        raise JukeboxError(0, f"queue is full (max {MAX_QUEUE} tracks)")
+
+
+def _finish(turn: asyncio.Future[None]) -> None:
+    if not turn.done():
+        turn.set_result(None)
+
+
+def _release(turn: asyncio.Future[None], previous: asyncio.Future[None] | None) -> None:
+    """End a turn, but not before the turn ahead of it has ended: later edits must not overtake."""
+    if previous is None or previous.done():
+        _finish(turn)
+    else:
+        previous.add_done_callback(lambda _: _finish(turn))
 
 
 def track_from_song(song: Mapping[str, Any]) -> Track:
@@ -95,6 +122,7 @@ class Jukebox:
         self._scrobbler = scrobbler
         self._plays = PlayTracker() if scrobbler is not None else None
         self.lock = asyncio.Lock()
+        self._turn: asyncio.Future[None] | None = None
         self._synced_at = float("-inf")
         self._queue_id = 0
         self.songs: list[Mapping[str, Any]] = []
@@ -144,11 +172,13 @@ class Jukebox:
         to_index: int | None = None,
         shuffle: bool | None = None,
         repeat: str | None = None,
+        *,
+        songs: Sequence[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if action not in self._actions:
             raise JukeboxError(0, "unknown action")
         try:
-            if action not in ("set", "clear", "add"):
+            if self._needs_sync(action):
                 await self._sync()
             if action == "setMute":
                 await self._set_mute(mute)
@@ -158,6 +188,8 @@ class Jukebox:
                 await self._set_shuffle(shuffle)
             elif action == "setRepeat":
                 await self._set_repeat(repeat)
+            elif action in SONG_ACTIONS:
+                await self._actions[action](await self._songs_for(ids, songs), index, offset, gain)
             else:
                 await self._actions[action](ids, index, offset, gain)
         except JukeboxError:
@@ -165,6 +197,88 @@ class Jukebox:
         except (UpnpError, PlayerError, ValueError, *REQUEST_ERRORS) as exc:
             raise JukeboxError(0, str(exc) or type(exc).__name__) from exc
         return self._payload(action)
+
+    async def execute(
+        self,
+        action: str,
+        ids: Sequence[str],
+        index: int | None,
+        offset: int | None,
+        gain: float | None,
+        mute: bool | None = None,
+        to_index: int | None = None,
+        shuffle: bool | None = None,
+        repeat: str | None = None,
+    ) -> dict[str, Any]:
+        """Run one request. Queue edits apply in arrival order; their song lookups run
+        beforehand and outside the lock, so other actions are not held up by them."""
+        args = (action, ids, index, offset, gain, mute, to_index, shuffle, repeat)
+        if action not in EDIT_ACTIONS:
+            async with self.lock:
+                return await self.handle(*args)
+        previous, turn = self._take_turn()
+        try:
+            songs = await self.resolve(ids) if action in SONG_ACTIONS else None
+            if previous is not None:
+                await asyncio.wait([previous])
+            async with self.lock:
+                return await self.handle(*args, songs=songs)
+        finally:
+            _release(turn, previous)
+
+    def _take_turn(self) -> tuple[asyncio.Future[None] | None, asyncio.Future[None]]:
+        previous = self._turn if self._turn is not None and not self._turn.done() else None
+        turn = asyncio.get_running_loop().create_future()
+        self._turn = turn
+        return previous, turn
+
+    async def resolve(self, ids: Sequence[str]) -> list[Mapping[str, Any]]:
+        if not ids:
+            raise JukeboxError(10, "Required parameter is missing: id")
+        if len(ids) > MAX_IDS_PER_CALL:
+            raise JukeboxError(0, f"too many ids in one call (max {MAX_IDS_PER_CALL})")
+        found: dict[str, Mapping[str, Any] | Exception | None] = {
+            song_id: self._seen[song_id] for song_id in ids if song_id in self._seen
+        }
+        missing = [song_id for song_id in dict.fromkeys(ids) if song_id not in found]
+        pending = iter(missing)
+
+        async def work() -> None:
+            for song_id in pending:
+                try:
+                    found[song_id] = await self._lookup(song_id)
+                except (ValueError, *REQUEST_ERRORS) as exc:
+                    found[song_id] = exc
+
+        workers = (work() for _ in range(min(LOOKUP_CONCURRENCY, len(missing))))
+        for outcome in await asyncio.gather(*workers, return_exceptions=True):
+            if isinstance(outcome, BaseException):
+                raise outcome
+        songs: list[Mapping[str, Any]] = []
+        for song_id in ids:
+            result = found[song_id]
+            if isinstance(result, Exception):
+                raise JukeboxError(0, str(result) or type(result).__name__) from result
+            if result is None:
+                raise JukeboxError(70, f"song not found: {song_id}")
+            songs.append(result)
+        return songs
+
+    async def _songs_for(
+        self, ids: Sequence[str], songs: Sequence[Mapping[str, Any]] | None
+    ) -> list[Mapping[str, Any]]:
+        if songs is None:
+            return await self.resolve(ids)
+        if not songs:
+            raise JukeboxError(10, "Required parameter is missing: id")
+        return list(songs)
+
+    def _needs_sync(self, action: str) -> bool:
+        if action in ("set", "clear", "add"):
+            return False
+        if action in POLL_ACTIONS:
+            return self._clock() - self._synced_at >= SYNC_REUSE_S
+        return True
 
     def _remember(self, songs: Sequence[Mapping[str, Any]]) -> None:
         for song in songs:
@@ -356,17 +470,6 @@ class Jukebox:
         logger.warning("seek to %ds not confirmed by the device", seconds)
         return False
 
-    async def _lookup_all(self, ids: Sequence[str]) -> list[Mapping[str, Any]]:
-        if not ids:
-            raise JukeboxError(10, "Required parameter is missing: id")
-        found = []
-        for song_id in ids:
-            song = await self._lookup(song_id)
-            if song is None:
-                raise JukeboxError(70, f"song not found: {song_id}")
-            found.append(song)
-        return found
-
     def _require_index(self, index: int | None) -> int:
         if index is None:
             raise JukeboxError(10, "Required parameter is missing: index")
@@ -377,8 +480,10 @@ class Jukebox:
     async def _noop(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         return None
 
-    async def _set(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
-        songs = await self._lookup_all(ids)
+    async def _set(
+        self, songs: list[Mapping[str, Any]], index: Any, offset: Any, gain: Any
+    ) -> None:
+        _check_room(0, len(songs))
         self._remember(songs)
         if self.loaded:
             await self._player.clear()
@@ -391,8 +496,10 @@ class Jukebox:
         self.playing = False
         self._set_position(0)
 
-    async def _add(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
-        songs = await self._lookup_all(ids)
+    async def _add(
+        self, songs: list[Mapping[str, Any]], index: Any, offset: Any, gain: Any
+    ) -> None:
+        _check_room(len(self.songs), len(songs))
         self._remember(songs)
         await self._append_songs(songs)
 
@@ -403,8 +510,10 @@ class Jukebox:
         self._keys.extend(self._new_keys(len(songs)))
         self._songs_changed()
 
-    async def _insert(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
-        songs = await self._lookup_all(ids)
+    async def _insert(
+        self, songs: list[Mapping[str, Any]], index: Any, offset: Any, gain: Any
+    ) -> None:
+        _check_room(len(self.songs), len(songs))
         self._remember(songs)
         if not self.songs:
             await self._append_songs(songs)
@@ -631,6 +740,11 @@ async def _collect(request: web.Request) -> tuple[dict[str, str], list[str]]:
     return params, list(ids)
 
 
+def gzip_if_accepted(request: web.Request, response: web.Response) -> None:
+    if "gzip" in request.headers.get("Accept-Encoding", "").lower():
+        response.enable_compression(web.ContentCoding.gzip)
+
+
 def add_jukebox_routes(
     app: web.Application, jukebox: Jukebox, authenticate: Authenticator
 ) -> None:
@@ -639,7 +753,10 @@ def add_jukebox_routes(
 
     async def run(request: web.Request) -> web.Response:
         params, ids = await _collect(request)
-        if not await authenticate(params):
+        verdict = await authenticate(params)
+        if verdict is AuthResult.UNREACHABLE:
+            return reply(error_envelope(0, UNREACHABLE_MESSAGE))
+        if verdict is not AuthResult.OK:
             logger.info("jukebox rejected login")
             return reply(error_envelope(WRONG_LOGIN, "Wrong username or password"))
         action = params.get("action")
@@ -653,10 +770,9 @@ def add_jukebox_routes(
             mute = _parse_bool(params, "mute")
             shuffle = _parse_bool(params, "shuffle")
             repeat = _parse_repeat(params)
-            async with jukebox.lock:
-                payload = await jukebox.handle(
-                    action, ids, index, offset, gain, mute, to_index, shuffle, repeat
-                )
+            payload = await jukebox.execute(
+                action, ids, index, offset, gain, mute, to_index, shuffle, repeat
+            )
         except JukeboxError as exc:
             if exc.code == WRONG_LOGIN:
                 logger.info("jukebox rejected login")
@@ -688,7 +804,10 @@ def add_jukebox_routes(
             *("-" if value is None else value for value in (gain, mute)),
             suffix,
         )
-        return reply(ok_envelope(payload))
+        response = reply(ok_envelope(payload))
+        if action == "get":
+            gzip_if_accepted(request, response)
+        return response
 
     async def preflight(request: web.Request) -> web.Response:
         return web.Response(status=204, headers=CORS_PREFLIGHT)

@@ -8,6 +8,7 @@ import pytest
 from bridge.player import (
     APPEND_BATCH,
     LOOP_MODES,
+    RETRY_701_S,
     Player,
     PlayerError,
     PlayerStatus,
@@ -28,6 +29,7 @@ class FakeWiim:
         self.failing: set[str] = set()
         self.timing_out: set[str] = set()
         self.fail_after: dict[str, int] = {}
+        self.errors: dict[str, list[Exception]] = {}
         self.device_state = DeviceState(
             t=0.0,
             transport="PLAYING",
@@ -40,6 +42,8 @@ class FakeWiim:
 
     async def _record(self, name: str, *args: Any) -> str:
         self.calls.append((name, args))
+        if self.errors.get(name):
+            raise self.errors[name].pop(0)
         if name in self.failing:
             raise UpnpError(701, "x")
         if name in self.fail_after and names(self).count(name) > self.fail_after[name]:
@@ -443,6 +447,104 @@ def test_transport_commands() -> None:
     ]
     with pytest.raises(ValueError):
         run(player.seek(-1))
+
+
+class Sleeps:
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.calls.append(seconds)
+
+
+def retrying(start: int = 0) -> tuple[Player, FakeWiim, Sleeps]:
+    fake = FakeWiim()
+    sleeps = Sleeps()
+    player = Player(fake, url_for, sleep=sleeps)  # type: ignore[arg-type]
+    run(player.load([tr("t0"), tr("t1"), tr("t2")], start=start))
+    fake.calls.clear()
+    return player, fake, sleeps
+
+
+RETRIED = [
+    ("pause", (), "pause"),
+    ("resume", (), "play"),
+    ("play_index", (2,), "queue_play"),
+    ("seek", (30,), "seek"),
+]
+
+
+def test_the_701_retry_waits_a_third_of_a_second() -> None:
+    assert RETRY_701_S == 0.3
+
+
+@pytest.mark.parametrize(("method", "args", "call"), RETRIED)
+def test_a_701_is_retried_once_after_a_pause(
+    method: str, args: tuple[Any, ...], call: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    player, fake, sleeps = retrying()
+    fake.errors[call] = [UpnpError(701, "Transition not allowed")]
+    run(getattr(player, method)(*args))
+    assert names(fake) == [call, call]
+    assert fake.calls[0][1] == fake.calls[1][1]
+    assert sleeps.calls == [RETRY_701_S]
+    (record,) = [r for r in caplog.records if r.name == "bridge.player"]
+    assert record.levelno == logging.INFO
+    assert method in record.getMessage()
+    assert "retrying" in record.getMessage()
+
+
+@pytest.mark.parametrize(("method", "args", "call"), RETRIED)
+def test_a_second_701_propagates(method: str, args: tuple[Any, ...], call: str) -> None:
+    player, fake, sleeps = retrying()
+    fake.errors[call] = [UpnpError(701, "x"), UpnpError(701, "y")]
+    with pytest.raises(UpnpError) as err:
+        run(getattr(player, method)(*args))
+    assert err.value.code == 701
+    assert names(fake) == [call, call]
+    assert sleeps.calls == [RETRY_701_S]
+    assert player.index == 0
+
+
+@pytest.mark.parametrize(("method", "args", "call"), RETRIED)
+@pytest.mark.parametrize(
+    "error", [UpnpError(500, "x"), UpnpError(None, "HTTP 500"), TimeoutError(), ValueError("v")]
+)
+def test_other_errors_are_not_retried(
+    method: str, args: tuple[Any, ...], call: str, error: Exception
+) -> None:
+    player, fake, sleeps = retrying()
+    fake.errors[call] = [error]
+    with pytest.raises(type(error)):
+        run(getattr(player, method)(*args))
+    assert names(fake) == [call]
+    assert sleeps.calls == []
+
+
+def test_a_retried_play_index_moves_the_index_only_after_it_worked() -> None:
+    player, fake, _ = retrying()
+    fake.errors["queue_play"] = [UpnpError(701, "x")]
+    run(player.play_index(2))
+    assert player.index == 2
+    assert fake.calls == [("queue_play", ("bridge", 3))] * 2
+
+
+def test_the_default_sleep_is_asyncio_sleep() -> None:
+    assert Player(FakeWiim(), url_for)._sleep is asyncio.sleep  # type: ignore[arg-type]
+
+
+def test_other_device_calls_are_not_retried() -> None:
+    player, fake, sleeps = retrying()
+    for method in ("stop", "next", "previous"):
+        fake.errors[method] = [UpnpError(701, "x")]
+        with pytest.raises(UpnpError):
+            run(getattr(player, method)())
+    fake.errors["pause"] = [UpnpError(701, "x")]
+    with pytest.raises(UpnpError):
+        run(player.load([tr("x")], play=False))
+    assert names(fake).count("pause") == 1
+    assert sleeps.calls == []
 
 
 def test_clear() -> None:

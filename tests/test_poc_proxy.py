@@ -18,6 +18,7 @@ from multidict import CIMultiDict
 import bridge.proxy as bp
 import bridge.subsonic as bs
 import poc_proxy as p
+from bridge import startup
 
 PAYLOAD = bytes(i % 251 for i in range(200000))
 PAYLOAD_SHA256 = hashlib.sha256(PAYLOAD).hexdigest()
@@ -540,23 +541,6 @@ def test_ping_navidrome_survives_non_json_reply() -> None:
     assert drive(ping_against(html)) == (False, None)
 
 
-def test_unreachable_message_hides_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def timing_out(self: Any, req: Any, traces: Any, timeout: Any) -> Any:
-        raise asyncio.TimeoutError
-
-    monkeypatch.setattr(aiohttp.BaseConnector, "connect", timing_out)
-    params = bs.subsonic_params("dan", "pw-secret", "abcd1234")
-    with pytest.raises(aiohttp.ClientError) as raw:
-        drive(bs.ping_navidrome("http://127.0.0.1:1", params))
-    assert "abcd1234" in str(raw.value)
-
-    message = p.check_navidrome("http://127.0.0.1:1", "dan", "pw-secret", "abcd1234")
-    assert message is not None
-    assert message.startswith("cannot reach Navidrome at http://127.0.0.1:1: ")
-    for hidden in ("pw-secret", "abcd1234", params["t"]):
-        assert hidden not in message
-
-
 def credentials_file(tmp_path: Path, password: str = "hunter2-pw") -> Path:
     content = json.dumps({"user": "dan", "password": password})
     return write_credentials(tmp_path / "credentials.json", content, 0o600)
@@ -589,7 +573,7 @@ def test_main_reports_rejected_credentials(
     async def rejected(url: str, params: Any) -> tuple[bool, str | None]:
         return False, "Wrong username or password"
 
-    monkeypatch.setattr(p, "ping_navidrome", rejected)
+    monkeypatch.setattr(startup, "ping_navidrome", rejected)
     assert p.main(cli_args(tmp_path)) == 2
     err = capsys.readouterr().err
     assert err == "error: Navidrome rejected the credentials: Wrong username or password\n"
@@ -602,7 +586,7 @@ def test_main_reports_unreachable_navidrome(
     async def unreachable(url: str, params: Any) -> tuple[bool, str | None]:
         raise aiohttp.ClientConnectionError("Cannot connect to host navidrome.invalid:4533")
 
-    monkeypatch.setattr(p, "ping_navidrome", unreachable)
+    monkeypatch.setattr(startup, "ping_navidrome", unreachable)
     assert p.main(cli_args(tmp_path)) == 2
     err = capsys.readouterr().err
     assert err.startswith("error: cannot reach Navidrome at http://navidrome.invalid:4533: ")
@@ -621,7 +605,7 @@ def test_main_writes_info_file_and_starts_server(
     def fake_run_app(app: web.Application, **kwargs: Any) -> None:
         started.update(app=app, **kwargs)
 
-    monkeypatch.setattr(p, "ping_navidrome", accepted)
+    monkeypatch.setattr(startup, "ping_navidrome", accepted)
     monkeypatch.setattr(p.web, "run_app", fake_run_app)
     args = cli_args(tmp_path, "--secret", SECRET, "--port", "9001", "--advertise-host", "10.0.0.5")
     assert p.main(args) == 0
@@ -651,7 +635,7 @@ def test_default_secret_is_generated(tmp_path: Path, monkeypatch: pytest.MonkeyP
     async def accepted(url: str, params: Any) -> tuple[bool, str | None]:
         return True, None
 
-    monkeypatch.setattr(p, "ping_navidrome", accepted)
+    monkeypatch.setattr(startup, "ping_navidrome", accepted)
     monkeypatch.setattr(p.web, "run_app", lambda app, **kwargs: None)
     assert p.main(cli_args(tmp_path)) == 0
     info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))

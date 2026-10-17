@@ -1,21 +1,29 @@
 import asyncio
+import gzip
+import json
 import logging
 import random
 import re
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
+import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_player import FakeWiim, url_for
 
+import bridge.jukebox as jukebox_module
 from bridge.jukebox import (
+    LOOKUP_CONCURRENCY,
+    MAX_IDS_PER_CALL,
+    MAX_QUEUE,
     SEEK_ATTEMPTS,
     SEEK_FRESH_TIMEOUT,
     SEEK_TOLERANCE,
     SEEK_WAIT_STEP,
     SEEK_WAIT_TIMEOUT,
+    SYNC_REUSE_S,
     Jukebox,
     JukeboxError,
     add_jukebox_routes,
@@ -23,9 +31,17 @@ from bridge.jukebox import (
     ok_envelope,
     track_from_song,
 )
-from bridge.player import Player, PlayerError, PlayerStatus, QueueDesyncError, Track
+from bridge.player import (
+    RETRY_701_S,
+    Player,
+    PlayerError,
+    PlayerStatus,
+    QueueDesyncError,
+    Track,
+)
 from bridge.scrobble import Scrobble, Scrobbler
 from bridge.soap import UpnpError
+from bridge.subsonic import AuthResult
 from bridge.wiim import parse_queue_tracks
 
 SONGS: dict[str, dict[str, Any]] = {
@@ -58,6 +74,7 @@ class FakePlayer:
         self.stale: list[float] = []
         self.stale_at_seek: list[int] = []
         self.sampled_at = 0.0
+        self.refreshes = 0
 
     def _rec(self, name: str, *args: Any) -> None:
         self.calls.append((name, args))
@@ -127,6 +144,7 @@ class FakePlayer:
         self.idx, self.is_playing = None, False
 
     async def refresh(self) -> PlayerStatus:
+        self.refreshes += 1
         if self.override is not None:
             return self.override
         if self.pending is not None:
@@ -138,6 +156,17 @@ class FakePlayer:
         idx, playing = self.pre_refreshes.pop(0) if self.pre_refreshes else (self.idx, self.is_playing)
         self.last_ok = playing and idx == self.idx
         return PlayerStatus(idx, playing, self.pos, True, None, self.volume, self.muted, self.sampled_at)
+
+
+@pytest.fixture(autouse=True)
+def read_the_device_on_every_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    # most tests poll back to back and expect every poll to read the device
+    monkeypatch.setattr(jukebox_module, "SYNC_REUSE_S", 0.0)
+
+
+@pytest.fixture
+def reuse_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(jukebox_module, "SYNC_REUSE_S", SYNC_REUSE_S)
 
 
 async def lookup(song_id: str) -> Mapping[str, Any] | None:
@@ -610,24 +639,22 @@ def test_track_from_song_and_envelopes() -> None:
     assert error_envelope(70, "m")["subsonic-response"]["error"] == {"code": 70, "message": "m"}
 
 
-async def _allow(params: Mapping[str, str]) -> bool:
-    return True
+async def _allow(params: Mapping[str, str]) -> AuthResult:
+    return AuthResult.OK
 
 
-def serve(
-    jb: Jukebox, authenticate: Any = _allow
-) -> TestClient[Any, Any]:
+def serve(jb: Jukebox, authenticate: Any = _allow, **client_kwargs: Any) -> TestClient[Any, Any]:
     app = web.Application()
     add_jukebox_routes(app, jb, authenticate)
-    return TestClient(TestServer(app))
+    return TestClient(TestServer(app), **client_kwargs)
 
 
 def test_http_ok_and_auth_failure() -> None:
     seen: list[Mapping[str, str]] = []
 
-    async def deny(params: Mapping[str, str]) -> bool:
+    async def deny(params: Mapping[str, str]) -> AuthResult:
         seen.append(params)
-        return False
+        return AuthResult.REJECTED
 
     async def scenario() -> None:
         jb, _ = make()
@@ -647,6 +674,87 @@ def test_http_ok_and_auth_failure() -> None:
             assert body["error"]["code"] == 40
         assert seen[0]["u"] == "x"
         assert seen[0]["action"] == "status"
+
+    run(scenario())
+
+
+def test_http_unreachable_navidrome_is_not_a_login_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def unreachable(params: Mapping[str, str]) -> AuthResult:
+        return AuthResult.UNREACHABLE
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb, unreachable) as client:
+            resp = await client.get("/rest/jukeboxControl?action=set&id=a")
+            assert resp.status == 200
+            assert resp.headers["Access-Control-Allow-Origin"] == "*"
+            error = (await resp.json())["subsonic-response"]["error"]
+            assert error == {"code": 0, "message": "Navidrome is unreachable, try again shortly"}
+            assert jb.songs == []
+
+    run(scenario())
+    assert jukebox_lines(caplog) == []
+
+
+def test_http_rejected_login_stays_code_40_and_runs_nothing() -> None:
+    async def rejected(params: Mapping[str, str]) -> AuthResult:
+        return AuthResult.REJECTED
+
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb, rejected) as client:
+            resp = await client.get("/rest/jukeboxControl?action=set&id=a")
+            error = (await resp.json())["subsonic-response"]["error"]
+            assert error == {"code": 40, "message": "Wrong username or password"}
+            assert jb.songs == []
+
+    run(scenario())
+
+
+def test_http_get_reply_is_gzipped_for_clients_that_accept_it() -> None:
+    jb, _ = make_numbered()
+    do(jb, "set", numbers(500))
+
+    async def scenario() -> None:
+        async with serve(jb, auto_decompress=False) as client:
+            url = "/rest/jukeboxControl?action=get"
+            for accept in ("gzip", "gzip, deflate, br, zstd", "deflate, GZip;q=0.8"):
+                resp = await client.get(url, headers={"Accept-Encoding": accept})
+                assert resp.headers["Content-Encoding"] == "gzip", accept
+                assert resp.headers["Access-Control-Allow-Origin"] == "*"
+                wire = await resp.read()
+                body = json.loads(gzip.decompress(wire))["subsonic-response"]
+                assert [e["id"] for e in body["jukeboxPlaylist"]["entry"]] == numbers(500)
+                assert len(wire) < len(gzip.decompress(wire)) / 2
+            plain = await client.get(url, headers={"Accept-Encoding": "identity"})
+            assert "Content-Encoding" not in plain.headers
+            assert len((await plain.json())["subsonic-response"]["jukeboxPlaylist"]["entry"]) == 500
+
+    run(scenario())
+
+
+def test_http_only_the_get_reply_is_compressed() -> None:
+    async def scenario() -> None:
+        jb, _ = make()
+        async with serve(jb, auto_decompress=False) as client:
+            gzip_header = {"Accept-Encoding": "gzip"}
+            for query in (
+                "action=status",
+                "action=set&id=a",
+                "action=setGain&gain=0.2",
+                "action=skip&index=9",
+                "action=nope",
+                "action=get&index=abc",
+            ):
+                resp = await client.get(f"/rest/jukeboxControl?{query}", headers=gzip_header)
+                assert "Content-Encoding" not in resp.headers, query
+                assert "subsonic-response" in json.loads(await resp.read())
+            resp = await client.get("/rest/jukeboxControl?action=get", headers=gzip_header)
+            assert resp.headers["Content-Encoding"] == "gzip"
 
     run(scenario())
 
@@ -777,7 +885,8 @@ def test_describe_memory_drops_oldest_after_500() -> None:
 
     jb = Jukebox(FakePlayer(), many)  # type: ignore[arg-type]
     ids = [str(n) for n in range(501)]
-    run(jb.handle("set", ids, None, None, None))
+    run(jb.handle("set", ids[:500], None, None, None))
+    run(jb.handle("add", ids[500:], None, None, None))
     run(jb.handle("clear", [], None, None, None))
     assert jb.describe("0") is None
     assert jb.describe("1") == ("T1", "")
@@ -1836,3 +1945,620 @@ def test_a_failed_first_remove_changes_nothing_and_does_not_reload() -> None:
     assert queue_ids(jb) == numbers(6)
     assert not jb.shuffle
     assert jb.loaded
+
+
+def test_a_701_on_skip_is_retried_once_by_the_player() -> None:
+    fake = FakeTime()
+    wiim = FakeWiim()
+    player = Player(wiim, url_for, sleep=fake.sleep)  # type: ignore[arg-type]
+    jb = Jukebox(player, numbered, sleep=fake.sleep, clock=fake.clock)
+    do(jb, "set", numbers(3))
+    do(jb, "start")
+    wiim.errors["queue_play"] = [UpnpError(701, "Transition not allowed")]
+    status = do(jb, "skip", index=2)["jukeboxStatus"]
+    assert status["currentIndex"] == 2
+    assert names_of(wiim).count("queue_play") == 2
+    assert fake.slept == RETRY_701_S
+    wiim.errors["queue_play"] = [UpnpError(701, "x"), UpnpError(701, "y")]
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "skip", index=1)
+    assert err.value.code == 0
+    assert names_of(wiim).count("queue_play") == 4
+    assert fake.slept == 2 * RETRY_701_S
+
+
+def test_the_sync_reuse_window_is_one_second() -> None:
+    assert SYNC_REUSE_S == 1.0
+
+
+@pytest.mark.parametrize("action", ["get", "status"])
+def test_polls_reuse_a_device_reading_younger_than_the_window(
+    reuse_window: None, action: str
+) -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    base = player.refreshes
+    assert base == 1
+    for now in (0.0, 0.5, SYNC_REUSE_S - 0.001):
+        fake.now = now
+        do(jb, action)
+        assert player.refreshes == base
+    fake.now = SYNC_REUSE_S
+    do(jb, action)
+    assert player.refreshes == base + 1
+    fake.now = SYNC_REUSE_S + 0.9
+    do(jb, action)
+    assert player.refreshes == base + 1
+    fake.now = 2 * SYNC_REUSE_S
+    do(jb, action)
+    assert player.refreshes == base + 2
+
+
+def test_get_and_status_share_one_reading(reuse_window: None) -> None:
+    jb, player, fake = make_timed()
+    do(jb, "status")
+    assert player.refreshes == 1
+    fake.now = 0.4
+    do(jb, "get")
+    do(jb, "status")
+    assert player.refreshes == 1
+
+
+@pytest.mark.parametrize(
+    ("action", "kw"),
+    [
+        ("skip", {"index": 1}),
+        ("start", {}),
+        ("stop", {}),
+        ("setGain", {"gain": 0.3}),
+        ("setMute", {"mute": True}),
+        ("setRepeat", {"repeat": "all"}),
+        ("move", {"index": 3, "to_index": 2}),
+        ("setShuffle", {"shuffle": True}),
+        ("insert", {"ids": ["9"]}),
+        ("remove", {"index": 2}),
+    ],
+)
+def test_every_other_action_reads_the_device_each_time(
+    reuse_window: None, action: str, kw: dict[str, Any]
+) -> None:
+    jb, player = numbered_queue(5, 0, load=True)
+    do(jb, "status")
+    before = player.refreshes
+    do(jb, action, **kw)
+    assert player.refreshes == before + 1
+
+
+def test_set_add_and_clear_still_skip_the_device_read(reuse_window: None) -> None:
+    jb, player = numbered_queue(3, 0, load=True)
+    do(jb, "status")
+    before = player.refreshes
+    do(jb, "add", ["9"])
+    do(jb, "set", ["a"])
+    do(jb, "clear")
+    assert player.refreshes == before
+
+
+def test_a_reused_reading_keeps_position_ms_moving(reuse_window: None) -> None:
+    player = FakePlayer()
+    fake = FakeTime()
+    wall = [1000.0]
+    jb = Jukebox(
+        player,  # type: ignore[arg-type]
+        lookup,
+        sleep=fake.sleep,
+        clock=fake.clock,
+        wall=lambda: wall[0],
+    )
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.pos, player.sampled_at = 12.0, 1000.0
+    fake.now = SYNC_REUSE_S
+    first = do(jb, "status")["jukeboxStatus"]
+    assert first["positionMs"] == 12000
+    base = player.refreshes
+    wall[0], fake.now = 1000.4, SYNC_REUSE_S + 0.4
+    reused = do(jb, "get")["jukeboxPlaylist"]
+    assert player.refreshes == base
+    assert (reused["position"], reused["positionMs"]) == (12, 12400)
+    wall[0] = 1000.9
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 12900
+    assert player.refreshes == base
+
+
+def test_a_stopped_player_keeps_its_position_on_a_reused_reading(reuse_window: None) -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.pos, player.sampled_at = 7.5, 0.0
+    fake.now = SYNC_REUSE_S
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 7500
+    fake.now += 0.3
+    assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 7500
+
+
+class GatedLookup:
+    """Song lookups that wait on a per-id event and record how many run at once."""
+
+    def __init__(self, gated: Sequence[str] = ()) -> None:
+        self.gates = {song_id: asyncio.Event() for song_id in gated}
+        self.calls: list[str] = []
+        self.in_flight = 0
+        self.peak = 0
+
+    def open(self, *song_ids: str) -> None:
+        for song_id in song_ids:
+            self.gates[song_id].set()
+
+    async def __call__(self, song_id: str) -> Mapping[str, Any] | None:
+        self.calls.append(song_id)
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            if song_id in self.gates:
+                await self.gates[song_id].wait()
+            else:
+                await asyncio.sleep(0)
+        finally:
+            self.in_flight -= 1
+        if song_id.startswith("missing"):
+            return None
+        if song_id.startswith("boom"):
+            raise aiohttp.ClientConnectionError("navidrome down")
+        return {"id": song_id, "title": f"T{song_id}"}
+
+
+def gated_jukebox(*gated: str) -> tuple[Jukebox, FakePlayer, GatedLookup]:
+    songs = GatedLookup(gated)
+    player = FakePlayer()
+    jb = Jukebox(player, songs, clock=FakeTime().clock)  # type: ignore[arg-type]
+    return jb, player, songs
+
+
+async def until(condition: Callable[[], bool], timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition never became true")
+        await asyncio.sleep(0.005)
+
+
+async def submit(jb: Jukebox, action: str, ids: Sequence[str] = (), **kw: Any) -> dict[str, Any]:
+    return await jb.execute(
+        action,
+        list(ids),
+        kw.get("index"),
+        kw.get("offset"),
+        kw.get("gain"),
+        kw.get("mute"),
+        kw.get("to_index"),
+        kw.get("shuffle"),
+        kw.get("repeat"),
+    )
+
+
+async def idle() -> None:
+    await asyncio.sleep(0.05)
+
+
+def test_a_later_edit_that_resolves_first_still_applies_second() -> None:
+    jb, _, songs = gated_jukebox("slow1", "slow2")
+
+    async def scenario() -> None:
+        first = asyncio.create_task(submit(jb, "add", ["slow1", "slow2"]))
+        await until(lambda: songs.in_flight == 2)
+        second = asyncio.create_task(submit(jb, "add", ["fast1", "fast2"]))
+        await until(lambda: "fast2" in songs.calls)
+        await idle()
+        assert not first.done()
+        assert not second.done()
+        assert queue_ids(jb) == []
+        songs.open("slow1", "slow2")
+        await asyncio.gather(first, second)
+        assert queue_ids(jb) == ["slow1", "slow2", "fast1", "fast2"]
+
+    run(scenario())
+
+
+def test_an_edit_without_lookups_waits_behind_an_earlier_slow_add() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+    do(jb, "set", ["a"])
+
+    async def scenario() -> None:
+        add = asyncio.create_task(submit(jb, "add", ["slow1"]))
+        await until(lambda: songs.in_flight == 1)
+        clear = asyncio.create_task(submit(jb, "clear"))
+        await idle()
+        assert not clear.done()
+        assert queue_ids(jb) == ["a"]
+        songs.open("slow1")
+        await asyncio.gather(add, clear)
+        assert queue_ids(jb) == []
+
+    run(scenario())
+
+
+def test_a_failed_edit_in_between_does_not_let_the_next_one_overtake() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+
+    async def scenario() -> None:
+        slow = asyncio.create_task(submit(jb, "add", ["slow1"]))
+        await until(lambda: songs.in_flight == 1)
+        with pytest.raises(JukeboxError) as err:
+            await submit(jb, "add", ["missing1"])
+        assert (err.value.code, err.value.message) == (70, "song not found: missing1")
+        with pytest.raises(JukeboxError) as err:
+            await submit(jb, "add")
+        assert err.value.code == 10
+        fast = asyncio.create_task(submit(jb, "add", ["fast1"]))
+        await until(lambda: "fast1" in songs.calls)
+        await idle()
+        assert not slow.done()
+        assert not fast.done()
+        assert queue_ids(jb) == []
+        songs.open("slow1")
+        await asyncio.gather(slow, fast)
+        assert queue_ids(jb) == ["slow1", "fast1"]
+
+    run(scenario())
+
+
+def test_cancelling_a_waiting_edit_does_not_cancel_the_one_it_waits_for() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+
+    async def scenario() -> None:
+        slow = asyncio.create_task(submit(jb, "add", ["slow1"]))
+        await until(lambda: songs.in_flight == 1)
+        waiting = asyncio.create_task(submit(jb, "add", ["fast1"]))
+        await until(lambda: "fast1" in songs.calls)
+        await idle()
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        later = asyncio.create_task(submit(jb, "add", ["fast2"]))
+        await until(lambda: "fast2" in songs.calls)
+        await idle()
+        assert not slow.done()
+        assert not later.done()
+        assert queue_ids(jb) == []
+        songs.open("slow1")
+        await asyncio.gather(slow, later)
+        assert queue_ids(jb) == ["slow1", "fast2"]
+
+    run(scenario())
+
+
+def test_cancelling_an_edit_during_its_lookups_keeps_the_order_of_the_others() -> None:
+    jb, _, songs = gated_jukebox("slowA", "slowB")
+
+    async def scenario() -> None:
+        first = asyncio.create_task(submit(jb, "add", ["slowA"]))
+        await until(lambda: songs.in_flight == 1)
+        doomed = asyncio.create_task(submit(jb, "add", ["slowB"]))
+        await until(lambda: songs.in_flight == 2)
+        doomed.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await doomed
+        last = asyncio.create_task(submit(jb, "add", ["fast1"]))
+        await until(lambda: "fast1" in songs.calls)
+        await idle()
+        assert not last.done()
+        assert queue_ids(jb) == []
+        songs.open("slowA")
+        await asyncio.gather(first, last)
+        assert queue_ids(jb) == ["slowA", "fast1"]
+
+    run(scenario())
+
+
+def test_an_edit_that_fails_in_the_queue_hands_the_turn_on() -> None:
+    jb, player, songs = gated_jukebox("slow1")
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    player.failing["clear"] = RuntimeError("boom")
+
+    async def scenario() -> None:
+        slow = asyncio.create_task(submit(jb, "add", ["slow1", "missing1"]))
+        await until(lambda: songs.in_flight == 1 and "missing1" in songs.calls)
+        after = asyncio.create_task(submit(jb, "add", ["fast1"]))
+        await until(lambda: "fast1" in songs.calls)
+        await idle()
+        assert not after.done()
+        songs.open("slow1")
+        with pytest.raises(JukeboxError) as err:
+            await slow
+        assert err.value.code == 70
+        await after
+        assert queue_ids(jb) == ["a", "b", "fast1"]
+        with pytest.raises(JukeboxError) as err:
+            await submit(jb, "remove", index=9)
+        assert (err.value.code, err.value.message) == (0, "index out of range")
+        with pytest.raises(RuntimeError):
+            await submit(jb, "clear")
+        await asyncio.wait_for(submit(jb, "add", ["fast2"]), 1)
+        assert queue_ids(jb) == ["a", "b", "fast1", "fast2"]
+
+    run(scenario())
+
+
+def test_unknown_actions_skip_the_queue() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+
+    async def scenario() -> None:
+        slow = asyncio.create_task(submit(jb, "add", ["slow1"]))
+        await until(lambda: songs.in_flight == 1)
+        with pytest.raises(JukeboxError) as err:
+            await asyncio.wait_for(submit(jb, "nope"), 1)
+        assert (err.value.code, err.value.message) == (0, "unknown action")
+        songs.open("slow1")
+        await slow
+
+    run(scenario())
+
+
+def test_many_edits_arriving_together_apply_in_arrival_order() -> None:
+    delays = {f"s{n}": 0.004 * (12 - n) for n in range(12)}
+
+    async def slower_first(song_id: str) -> Mapping[str, Any] | None:
+        await asyncio.sleep(delays[song_id])
+        return {"id": song_id, "title": song_id}
+
+    jb = Jukebox(FakePlayer(), slower_first)  # type: ignore[arg-type]
+
+    async def scenario() -> None:
+        tasks = []
+        for n in range(12):
+            tasks.append(asyncio.create_task(submit(jb, "add", [f"s{n}"])))
+            await asyncio.sleep(0)
+        await asyncio.gather(*tasks)
+        assert queue_ids(jb) == [f"s{n}" for n in range(12)]
+
+    run(scenario())
+
+
+def test_skip_and_status_are_answered_while_an_add_waits_for_its_lookups() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+    do(jb, "set", ["a", "b"])
+
+    async def scenario() -> None:
+        async with serve(jb) as client:
+            add = asyncio.create_task(client.get("/rest/jukeboxControl?action=add&id=slow1"))
+            await until(lambda: songs.in_flight == 1)
+            skip = await asyncio.wait_for(client.get("/rest/jukeboxControl?action=skip&index=1"), 2)
+            status = await asyncio.wait_for(client.get("/rest/jukeboxControl?action=status"), 2)
+            assert (await skip.json())["subsonic-response"]["jukeboxStatus"]["currentIndex"] == 1
+            assert (await status.json())["subsonic-response"]["status"] == "ok"
+            assert not add.done()
+            songs.open("slow1")
+            body = (await (await add).json())["subsonic-response"]
+            assert body["status"] == "ok"
+            assert queue_ids(jb) == ["a", "b", "slow1"]
+
+    run(scenario())
+
+
+def test_http_slow_add_then_fast_add_keeps_arrival_order() -> None:
+    jb, _, songs = gated_jukebox("slow1")
+
+    async def scenario() -> None:
+        async with serve(jb) as client:
+            first = asyncio.create_task(client.get("/rest/jukeboxControl?action=add&id=slow1"))
+            await until(lambda: songs.in_flight == 1)
+            second = asyncio.create_task(client.get("/rest/jukeboxControl?action=add&id=fast1"))
+            await until(lambda: "fast1" in songs.calls)
+            await idle()
+            assert not second.done()
+            songs.open("slow1")
+            for response in await asyncio.gather(first, second):
+                assert (await response.json())["subsonic-response"]["status"] == "ok"
+            assert queue_ids(jb) == ["slow1", "fast1"]
+
+    run(scenario())
+
+
+def test_resolve_runs_at_most_eight_lookups_at_once_and_keeps_input_order() -> None:
+    assert LOOKUP_CONCURRENCY == 8
+    ids = [f"s{n}" for n in range(40)]
+    jb, _, songs = gated_jukebox(*ids)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(jb.resolve(ids))
+        await until(lambda: songs.in_flight == LOOKUP_CONCURRENCY)
+        await idle()
+        assert songs.in_flight == LOOKUP_CONCURRENCY
+        assert len(songs.calls) == LOOKUP_CONCURRENCY
+        released: list[str] = []
+        while len(released) < len(ids):
+            await until(lambda: any(i not in released for i in songs.calls))
+            newest = [i for i in songs.calls if i not in released][-1]
+            released.append(newest)
+            songs.open(newest)
+            await asyncio.sleep(0)
+        found = await task
+        assert [song["id"] for song in found] == ids
+        assert released != ids
+        assert songs.peak == LOOKUP_CONCURRENCY
+
+    run(scenario())
+
+
+def test_resolve_takes_remembered_songs_without_a_lookup() -> None:
+    jb, _, songs = gated_jukebox()
+    do(jb, "set", ["a"])
+    songs.calls.clear()
+    assert [s["id"] for s in run(jb.resolve(["a"]))] == ["a"]
+    assert songs.calls == []
+    found = run(jb.resolve(["new", "a", "new"]))
+    assert [s["id"] for s in found] == ["new", "a", "new"]
+    assert songs.calls == ["new"]
+    assert found[0] is found[2]
+
+
+def test_resolve_needs_ids_and_caps_them_per_call() -> None:
+    jb, _, songs = gated_jukebox()
+    with pytest.raises(JukeboxError) as err:
+        run(jb.resolve([]))
+    assert (err.value.code, err.value.message) == (10, "Required parameter is missing: id")
+    assert MAX_IDS_PER_CALL == 500
+    with pytest.raises(JukeboxError) as err:
+        run(jb.resolve([str(n) for n in range(501)]))
+    assert (err.value.code, err.value.message) == (0, "too many ids in one call (max 500)")
+    assert songs.calls == []
+    assert len(run(jb.resolve([str(n) for n in range(500)]))) == 500
+
+
+def test_a_call_with_too_many_ids_changes_nothing() -> None:
+    jb, player, songs = gated_jukebox()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    player.calls.clear()
+    songs.calls.clear()
+    before = version_of(jb)
+    for action in ("set", "add", "insert"):
+        with pytest.raises(JukeboxError) as err:
+            do(jb, action, [str(n) for n in range(501)])
+        assert err.value.code == 0
+        with pytest.raises(JukeboxError):
+            run(submit(jb, action, [str(n) for n in range(501)]))
+    assert songs.calls == []
+    assert player.calls == []
+    assert queue_ids(jb) == ["a"]
+    assert version_of(jb) == before
+
+
+@pytest.mark.parametrize(
+    ("ids", "code", "message"),
+    [
+        (["ok", "missing2", "missing1"], 70, "song not found: missing2"),
+        (["ok", "boom", "missing1"], 0, "navidrome down"),
+        (["missing1", "boom"], 70, "song not found: missing1"),
+        (["boom", "boom2"], 0, "navidrome down"),
+    ],
+)
+def test_resolve_reports_the_first_problem_in_input_order(
+    ids: list[str], code: int, message: str
+) -> None:
+    jb, _, _ = gated_jukebox()
+    with pytest.raises(JukeboxError) as err:
+        run(jb.resolve(ids))
+    assert (err.value.code, err.value.message) == (code, message)
+
+
+def test_resolve_names_a_lookup_error_without_a_message_by_its_type() -> None:
+    async def timing_out(song_id: str) -> Mapping[str, Any] | None:
+        raise TimeoutError
+
+    jb = Jukebox(FakePlayer(), timing_out)  # type: ignore[arg-type]
+    with pytest.raises(JukeboxError) as err:
+        run(jb.resolve(["a"]))
+    assert (err.value.code, err.value.message) == (0, "TimeoutError")
+
+
+def test_resolve_passes_unexpected_errors_through() -> None:
+    async def broken(song_id: str) -> Mapping[str, Any] | None:
+        raise RuntimeError("bug")
+
+    jb = Jukebox(FakePlayer(), broken)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="bug"):
+        run(jb.resolve(["a", "b"]))
+
+
+def test_resolve_looks_each_distinct_id_up_once() -> None:
+    jb, _, songs = gated_jukebox()
+    found = run(jb.resolve(["x", "y", "x", "x"]))
+    assert sorted(songs.calls) == ["x", "y"]
+    assert [s["id"] for s in found] == ["x", "y", "x", "x"]
+
+
+def test_a_lookup_failure_in_a_set_through_handle_is_a_generic_error() -> None:
+    jb, _, _ = gated_jukebox()
+    with pytest.raises(JukeboxError) as err:
+        do(jb, "set", ["boom"])
+    assert (err.value.code, err.value.message) == (0, "navidrome down")
+
+
+@pytest.mark.parametrize("action", ["set", "add", "insert"])
+def test_handle_uses_given_songs_instead_of_looking_them_up(action: str) -> None:
+    jb, _, songs = gated_jukebox()
+    given = [{"id": "g1", "title": "G1"}, {"id": "g2", "title": "G2"}]
+    run(jb.handle(action, ["ignored"], None, None, None, songs=given))
+    assert songs.calls == []
+    assert queue_ids(jb) == ["g1", "g2"]
+    assert jb.songs is not given
+    assert jb.describe("g1") == ("G1", "")
+    assert [s["id"] for s in jb._seen.values()] == ["g1", "g2"]
+
+
+def test_handle_with_empty_given_songs_is_a_missing_id() -> None:
+    jb, _, _ = gated_jukebox()
+    for action in ("set", "add", "insert"):
+        with pytest.raises(JukeboxError) as err:
+            run(jb.handle(action, ["a"], None, None, None, songs=[]))
+        assert err.value.code == 10
+
+
+def test_queue_cap_refuses_without_touching_the_queue_or_the_device() -> None:
+    assert MAX_QUEUE == 1000
+    jb, player = make_numbered()
+    do(jb, "set", numbers(500))
+    do(jb, "add", [str(n) for n in range(500, 1000)])
+    do(jb, "start")
+    assert len(jb.songs) == MAX_QUEUE
+    player.calls.clear()
+    before = version_of(jb)
+    for action in ("add", "insert"):
+        with pytest.raises(JukeboxError) as err:
+            do(jb, action, ["1000"])
+        assert (err.value.code, err.value.message) == (0, "queue is full (max 1000 tracks)")
+    assert len(jb.songs) == MAX_QUEUE
+    assert player.calls == []
+    assert version_of(jb) == before
+    assert jb.describe("1000") is None
+
+
+def test_queue_cap_counts_the_whole_call() -> None:
+    jb, player = make_numbered()
+    do(jb, "set", numbers(500))
+    do(jb, "add", [str(n) for n in range(500, 999)])
+    do(jb, "start")
+    player.calls.clear()
+    with pytest.raises(JukeboxError):
+        do(jb, "insert", ["a", "b"])
+    assert len(jb.songs) == 999
+    assert player.calls == []
+    do(jb, "insert", ["a"])
+    assert len(jb.songs) == MAX_QUEUE
+
+
+def test_queue_cap_applies_to_a_set_too() -> None:
+    jb, player = make_numbered()
+    do(jb, "set", ["0", "1"])
+    do(jb, "start")
+    player.calls.clear()
+    too_many = [{"id": str(n), "title": str(n)} for n in range(MAX_QUEUE + 1)]
+    with pytest.raises(JukeboxError) as err:
+        run(jb.handle("set", [], None, None, None, songs=too_many))
+    assert err.value.message == "queue is full (max 1000 tracks)"
+    assert queue_ids(jb) == ["0", "1"]
+    assert player.calls == []
+
+
+def test_http_queue_cap_and_id_cap_errors() -> None:
+    jb, _ = make_numbered()
+    do(jb, "set", numbers(500))
+    do(jb, "add", [str(n) for n in range(500, 1000)])
+
+    async def scenario() -> None:
+        async with serve(jb) as client:
+            resp = await client.get("/rest/jukeboxControl?action=add&id=x")
+            error = (await resp.json())["subsonic-response"]["error"]
+            assert error == {"code": 0, "message": "queue is full (max 1000 tracks)"}
+            ids = "&".join(f"id={n}" for n in range(501))
+            resp = await client.get(f"/rest/jukeboxControl?action=set&{ids}")
+            error = (await resp.json())["subsonic-response"]["error"]
+            assert error == {"code": 0, "message": "too many ids in one call (max 500)"}
+            assert len(jb.songs) == MAX_QUEUE
+
+    run(scenario())

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterable, Mapping
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,14 @@ UPSTREAM_HEADERS = {"Accept-Encoding": "identity"}
 
 class ConfigError(Exception):
     """Raised for unusable credentials."""
+
+
+class AuthResult(Enum):
+    """Outcome of a login check: accepted, refused by Navidrome, or no usable answer."""
+
+    OK = "ok"
+    REJECTED = "rejected"
+    UNREACHABLE = "unreachable"
 
 
 def load_credentials(path: Path) -> tuple[str, str]:

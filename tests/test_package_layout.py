@@ -9,6 +9,8 @@ from test_poc_proxy import PAYLOAD, PAYLOAD_SHA256, FakeUpstream, drive, make_co
 
 from bridge.proxy import add_proxy_routes
 
+ROOT = Path(__file__).resolve().parent.parent
+
 EXPECTED = {
     "bridge.soap": [
         "escape_xml", "build_envelope", "soap_headers", "escape_metadata", "format_hms",
@@ -22,8 +24,9 @@ EXPECTED = {
     ],
     "bridge.subsonic": [
         "ConfigError", "load_credentials", "subsonic_params", "DEFAULT_CREDENTIALS",
-        "UPSTREAM_HEADERS", "parse_ping", "ping_navidrome", "describe_error",
+        "UPSTREAM_HEADERS", "parse_ping", "ping_navidrome", "describe_error", "AuthResult",
     ],
+    "bridge.startup": ["check_navidrome", "write_info_file"],
     "bridge.proxy": [
         "PROFILES", "parse_range_start", "response_headers", "ProxyConfig", "RequestLog",
         "handle_stream", "create_app", "add_proxy_routes",
@@ -56,3 +59,8 @@ def test_add_proxy_routes_serves_full_get(tmp_path: Path) -> None:
     ends = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
     assert [e["ev"] for e in ends] == ["start", "end"]
     assert ends[1]["sha256"] == PAYLOAD_SHA256
+
+
+def test_the_production_entrypoint_does_not_depend_on_the_poc_proxy() -> None:
+    for relative in ("tools/bridge_server.py", "Dockerfile"):
+        assert "poc_proxy" not in (ROOT / relative).read_text(encoding="utf-8"), relative

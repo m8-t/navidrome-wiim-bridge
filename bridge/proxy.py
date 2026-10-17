@@ -353,7 +353,7 @@ def add_proxy_routes(
     app[LOG_KEY] = RequestLog(config.log_path)
     app[COUNTER_KEY] = itertools.count(1)
     app.cleanup_ctx.append(upstream_session)
-    app.router.add_get("/s/{secret}/{profile}/{name}", handle_stream)
+    app.router.add_get("/s/{secret}/{profile}/{name}", handle_stream, name="stream")
 
 
 def create_app(config: ProxyConfig) -> web.Application:

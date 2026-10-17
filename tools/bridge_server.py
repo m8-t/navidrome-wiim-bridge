@@ -5,22 +5,28 @@ import logging
 import os
 import re
 import secrets
+import socket
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-import poc_proxy  # noqa: E402
-
+from bridge import startup  # noqa: E402
 from bridge.app import BridgeConfig, build_app  # noqa: E402
 from bridge.log import parse_level, setup_logging  # noqa: E402
-from bridge.subsonic import DEFAULT_CREDENTIALS, ConfigError, load_credentials  # noqa: E402
+from bridge.subsonic import (  # noqa: E402
+    DEFAULT_CREDENTIALS,
+    AuthResult,
+    ConfigError,
+    load_credentials,
+)
 from bridge.wiim import Wiim, device_urls, open_sessions  # noqa: E402
 
 
@@ -44,6 +50,7 @@ class Settings:
     navidrome_url: str
     bind: str
     port: int
+    device_port: int | None
     max_volume: int
     queue_name: str
     keep_queue_on_start: bool
@@ -86,6 +93,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--port",
         help=f"port to listen on, 1 to 65535 (env BRIDGE_PORT, default: {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--device-port",
+        help="second port that serves only the audio URLs and /healthz, 1 to 65535, not the same "
+        "as --port; the amplifier is told to use it (env BRIDGE_DEVICE_PORT, default: none, "
+        "everything is served on --port)",
     )
     parser.add_argument(
         "--max-volume",
@@ -153,12 +166,12 @@ def _string(option: str | None, environ: Mapping[str, str], name: str, default: 
     return _pick(option, environ, name)[0] or default
 
 
-def _integer(
-    option: str | None, environ: Mapping[str, str], name: str, default: int, low: int, high: int
-) -> int:
+def _optional_integer(
+    option: str | None, environ: Mapping[str, str], name: str, low: int, high: int
+) -> int | None:
     value, label = _pick(option, environ, name)
     if value is None:
-        return default
+        return None
     try:
         number = int(value.strip())
     except ValueError:
@@ -166,6 +179,13 @@ def _integer(
     if number is None or not low <= number <= high:
         raise ConfigError(f"{label} must be an integer from {low} to {high}")
     return number
+
+
+def _integer(
+    option: str | None, environ: Mapping[str, str], name: str, default: int, low: int, high: int
+) -> int:
+    number = _optional_integer(option, environ, name, low, high)
+    return default if number is None else number
 
 
 def _boolean(option: bool | None, environ: Mapping[str, str], name: str) -> bool:
@@ -202,6 +222,11 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
     elif device_base is None or status_url is None:
         raise ConfigError("set BRIDGE_DEVICE_HOST (or --device-host) to the amplifier's address")
     port = _integer(args.port, environ, "BRIDGE_PORT", DEFAULT_PORT, 1, 65535)
+    device_port = _optional_integer(args.device_port, environ, "BRIDGE_DEVICE_PORT", 1, 65535)
+    if device_port == port:
+        device_label = _pick(args.device_port, environ, "BRIDGE_DEVICE_PORT")[1]
+        port_label = _pick(args.port, environ, "BRIDGE_PORT")[1]
+        raise ConfigError(f"{device_label} must differ from {port_label}")
     max_volume = _integer(
         args.max_volume, environ, "BRIDGE_MAX_VOLUME", DEFAULT_MAX_VOLUME, 0, 100
     )
@@ -217,6 +242,7 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
         ).rstrip("/"),
         bind=_string(args.bind, environ, "BRIDGE_BIND", DEFAULT_BIND),
         port=port,
+        device_port=device_port,
         max_volume=max_volume,
         queue_name=_string(args.queue_name, environ, "BRIDGE_QUEUE_NAME", DEFAULT_QUEUE_NAME),
         keep_queue_on_start=keep_queue,
@@ -265,6 +291,11 @@ def make_app_factory(config: BridgeConfig) -> Callable[[], Awaitable[web.Applica
     return factory
 
 
+def listen_on(bind: str, port: int) -> socket.socket:
+    family = socket.AF_INET6 if ":" in bind else socket.AF_INET
+    return socket.create_server((bind, port), family=family)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
@@ -276,13 +307,28 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     salt = secrets.token_hex(8)
-    problem = poc_proxy.check_navidrome(settings.navidrome_url, user, password, salt)
-    if problem is not None:
+    verdict, problem = startup.check_navidrome(settings.navidrome_url, user, password, salt)
+    if verdict is AuthResult.REJECTED:
         print(f"error: {problem}", file=sys.stderr)
         return 2
+    if verdict is AuthResult.UNREACHABLE:
+        logger.warning(
+            "%s; starting anyway, requests that need Navidrome fail until it is back", problem
+        )
+    run_options: dict[str, Any] = {}
+    audio_port = settings.port
+    if settings.device_port is not None:
+        audio_port = settings.device_port
+        try:
+            run_options["sock"] = listen_on(settings.bind, settings.device_port)
+        except OSError as exc:
+            reason = exc.strerror or type(exc).__name__
+            address = f"{settings.bind}:{audio_port}"
+            print(f"error: cannot listen on {address}: {reason}", file=sys.stderr)
+            return 2
     if settings.info_file is not None:
-        base_url = f"http://{settings.advertise_host}:{settings.port}/s/{secret}"
-        poc_proxy.write_info_file(settings.info_file, base_url, settings.navidrome_url, settings.log)
+        base_url = f"http://{settings.advertise_host}:{audio_port}/s/{secret}"
+        startup.write_info_file(settings.info_file, base_url, settings.navidrome_url, settings.log)
     logger.info(
         "listening on %s:%d, advertised as http://%s:%d",
         settings.bind,
@@ -290,6 +336,14 @@ def main(argv: list[str] | None = None) -> int:
         settings.advertise_host,
         settings.port,
     )
+    if settings.device_port is not None:
+        logger.info(
+            "audio-only device port %s:%d, advertised as http://%s:%d",
+            settings.bind,
+            settings.device_port,
+            settings.advertise_host,
+            settings.device_port,
+        )
     logger.info("navidrome at %s", settings.navidrome_url)
     logger.info("device at %s", settings.device_base)
     logger.info("audio URLs under /s/<hidden>")
@@ -310,8 +364,15 @@ def main(argv: list[str] | None = None) -> int:
         max_volume=settings.max_volume,
         clear_on_start=not settings.keep_queue_on_start,
         scrobble=settings.scrobble,
+        device_port=settings.device_port,
     )
-    web.run_app(make_app_factory(config)(), host=settings.bind, port=settings.port, print=None)
+    web.run_app(
+        make_app_factory(config)(),
+        host=settings.bind,
+        port=settings.port,
+        print=None,
+        **run_options,
+    )
     return 0
 
 

@@ -11,18 +11,21 @@ from typing import Any
 
 import aiohttp
 from aiohttp import web
+from aiohttp.typedefs import Handler, Middleware
 from yarl import URL
 
 from bridge.jukebox import Jukebox, add_jukebox_routes
 from bridge.player import Player
 from bridge.proxy import ProxyConfig, add_proxy_routes
 from bridge.scrobble import POLL_INTERVAL_S, Scrobbler, watch
-from bridge.subsonic import UPSTREAM_HEADERS, subsonic_params
+from bridge.subsonic import UPSTREAM_HEADERS, AuthResult, subsonic_params
 
 logger = logging.getLogger("bridge.app")
 
 AUTH_PARAMS = ("u", "p", "t", "s", "apiKey")
 AUTH_CACHE_SECONDS = 60
+AUTH_STALE_SECONDS = 3600
+AUTH_CACHE_MAX = 256
 CHUNK_SIZE = 65536
 REQUEST_HOP_HEADERS = frozenset(
     {
@@ -37,6 +40,7 @@ REQUEST_HOP_HEADERS = frozenset(
         "trailer",
     }
 )
+REQUEST_DROPPED_HEADERS = REQUEST_HOP_HEADERS | {"remote-user"}
 RESPONSE_HOP_HEADERS = frozenset({"transfer-encoding", "connection", "keep-alive"})
 
 
@@ -57,11 +61,13 @@ class BridgeConfig:
     max_volume: int = 100
     clear_on_start: bool = True
     scrobble: bool = False
+    device_port: int | None = None
 
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
+    port = config.port if config.device_port is None else config.device_port
     return (
-        f"http://{config.advertise_host}:{config.port}"
+        f"http://{config.advertise_host}:{port}"
         f"/s/{config.secret}/{config.profile}/{song_id}.flac"
     )
 
@@ -83,6 +89,7 @@ class NavidromeClient:
         self._salt = salt
         self._clock = clock
         self._verified: dict[tuple[str | None, ...], float] = {}
+        self._reachable = True
 
     async def _get_json(self, path: str, params: Mapping[str, str]) -> Any:
         async with self._session.get(
@@ -114,23 +121,54 @@ class NavidromeClient:
         body = await self._get_json("/rest/scrobble", params)
         return body is not None and body.get("status") == "ok"
 
-    async def check_caller(self, params: Mapping[str, str]) -> bool:
+    async def check_caller(self, params: Mapping[str, str]) -> AuthResult:
         if "u" not in params and "apiKey" not in params:
-            return False
+            return AuthResult.REJECTED
         key = tuple(params.get(name) for name in AUTH_PARAMS)
-        cached_at = self._verified.get(key)
-        if cached_at is not None and self._clock() - cached_at < AUTH_CACHE_SECONDS:
-            return True
+        if self._age(key) < AUTH_CACHE_SECONDS:
+            return AuthResult.OK
         query = {name: params[name] for name in AUTH_PARAMS if name in params}
         query |= {"v": "1.16.1", "c": "wiim-bridge-auth", "f": "json"}
         try:
             body = await self._get_json("/rest/ping", query)
-        except (aiohttp.ClientError, TimeoutError):
-            return False
-        if body is None or body.get("status") != "ok":
-            return False
-        self._verified[key] = self._clock()
-        return True
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            return self._no_answer(key, type(exc).__name__)
+        status = body.get("status") if body is not None else None
+        if status == "ok":
+            self._answered()
+            self._remember(key)
+            return AuthResult.OK
+        if status == "failed":
+            self._answered()
+            self._verified.pop(key, None)
+            return AuthResult.REJECTED
+        return self._no_answer(key, "unusable reply")
+
+    def _age(self, key: tuple[str | None, ...]) -> float:
+        verified_at = self._verified.get(key)
+        return float("inf") if verified_at is None else self._clock() - verified_at
+
+    def _remember(self, key: tuple[str | None, ...]) -> None:
+        now = self._clock()
+        self._verified.pop(key, None)
+        self._verified[key] = now
+        for stale in [k for k, at in self._verified.items() if now - at >= AUTH_STALE_SECONDS]:
+            del self._verified[stale]
+        while len(self._verified) > AUTH_CACHE_MAX:
+            del self._verified[next(iter(self._verified))]
+
+    def _no_answer(self, key: tuple[str | None, ...], reason: str) -> AuthResult:
+        if self._reachable:
+            self._reachable = False
+            logger.warning("navidrome is unreachable: %s", reason)
+        if self._age(key) < AUTH_STALE_SECONDS:
+            return AuthResult.OK
+        return AuthResult.UNREACHABLE
+
+    def _answered(self) -> None:
+        if not self._reachable:
+            self._reachable = True
+            logger.info("navidrome answers again")
 
 
 CONFIG_KEY = web.AppKey("bridge_config", BridgeConfig)
@@ -141,9 +179,12 @@ JUKEBOX_KEY = web.AppKey("jukebox", Jukebox)
 
 
 async def passthrough(request: web.Request) -> web.StreamResponse:
+    target = request.raw_path
+    if not target.startswith("/") or target.startswith("//"):
+        return web.Response(status=400, text="bad request target")
     base = request.app[CONFIG_KEY].navidrome_url
-    url = URL(base + request.raw_path, encoded=True)
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_HOP_HEADERS}
+    url = URL(base + target, encoded=True)
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_DROPPED_HEADERS}
     body = await request.read()
     session = request.app[PASSTHROUGH_SESSION_KEY]
     resp: web.StreamResponse | None = None
@@ -178,6 +219,25 @@ async def _passthrough_session(app: web.Application) -> AsyncIterator[None]:
         yield
 
 
+DEVICE_ROUTES = frozenset({"stream", "healthz"})
+
+
+def device_port_only(device_port: int) -> Middleware:
+    """Answer 404 on the device listener for everything but the audio and health routes."""
+
+    @web.middleware
+    async def guard(request: web.Request, handler: Handler) -> web.StreamResponse:
+        transport = request.transport
+        sockname = transport.get_extra_info("sockname") if transport is not None else None
+        local_port = sockname[1] if isinstance(sockname, tuple) else None
+        on_device_port = local_port is None or local_port == device_port
+        if on_device_port and request.match_info.route.name not in DEVICE_ROUTES:
+            return web.Response(status=404)
+        return await handler(request)
+
+    return guard
+
+
 REMOTE_DIR = Path(__file__).resolve().parent / "remote"
 REMOTE_FILES = ("index.html", "remote.css", "remote.js", "logic.js", "md5.js")
 REMOTE_HEADERS = {"Cache-Control": "no-cache"}
@@ -204,7 +264,8 @@ def add_remote_routes(app: web.Application) -> None:
 def build_app(
     config: BridgeConfig, wiim: Any, navidrome: NavidromeClient | None = None
 ) -> web.Application:
-    app = web.Application()
+    middlewares = [] if config.device_port is None else [device_port_only(config.device_port)]
+    app = web.Application(middlewares=middlewares)
     app[CONFIG_KEY] = config
     if navidrome is not None:
         app[NAVIDROME_KEY] = navidrome
@@ -222,7 +283,7 @@ def build_app(
     async def lookup(song_id: str) -> Mapping[str, Any] | None:
         return await app[NAVIDROME_KEY].get_song(song_id)
 
-    async def authenticate(params: Mapping[str, str]) -> bool:
+    async def authenticate(params: Mapping[str, str]) -> AuthResult:
         return await app[NAVIDROME_KEY].check_caller(params)
 
     player = Player(
@@ -280,6 +341,6 @@ def build_app(
     async def healthz(request: web.Request) -> web.StreamResponse:
         return web.Response(text="ok")
 
-    app.router.add_get("/healthz", healthz)
+    app.router.add_get("/healthz", healthz, name="healthz")
     app.router.add_route("*", "/{tail:.*}", passthrough)
     return app
