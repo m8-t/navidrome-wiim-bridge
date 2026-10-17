@@ -153,6 +153,7 @@ Further settings:
 |---|---|---|---|
 | `BRIDGE_PORT` | `--port` | `8098` | port to listen on |
 | `BRIDGE_BIND` | `--bind` | `0.0.0.0` | address to listen on |
+| `BRIDGE_DEVICE_PORT` | `--device-port` | none | a second port that serves only the audio URLs and `/healthz`; the WiiM is told to use it, so the address it fetches from needs to expose nothing else |
 | `BRIDGE_SECRET` | `--secret` | random per start | path secret for the audio addresses, see below |
 | `BRIDGE_LOG_LEVEL` | `--log-level` | `info` | `debug`, `info`, `warn` or `error` |
 | `BRIDGE_MAX_VOLUME` | `--max-volume` | `100` | ceiling for the volume, 0 to 100 |
@@ -173,8 +174,9 @@ export BRIDGE_NAVIDROME_URL=http://127.0.0.1:4533
 python tools/bridge_server.py
 ```
 
-At start the bridge checks that Navidrome accepts the user and exits if not. It also
-clears its queue on the device, so a restart stops the music.
+At start the bridge checks the user with Navidrome and exits if Navidrome rejects it. If
+Navidrome cannot be reached, it logs a warning and starts anyway. It also clears its
+queue on the device, so a restart stops the music.
 
 ### The path secret (`--secret`, `BRIDGE_SECRET`)
 
@@ -235,7 +237,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.8.1
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.9.0
 ```
 
 ### Kubernetes
@@ -246,7 +248,7 @@ whole stack:
 - Navidrome: a ConfigMap, a Deployment with the music library mounted read-only, a
   volume claim for its database and a Service;
 - the bridge: a ConfigMap for the addresses, a Deployment, a Service for clients and a
-  LoadBalancer Service with a fixed address for the WiiM;
+  LoadBalancer Service with a fixed address for the WiiM, on the audio-only device port;
 - the patched Feishin web UI: a ConfigMap, a Deployment and a Service;
 - examples for an Ingress and a Gateway API route that give each of them a host.
 
@@ -319,11 +321,15 @@ pauses while it is on. The switch is in the page's settings and is off by defaul
   bridge does not notice until repeat is set again from the page.
 - Removing the track that is playing stops playback, and it cannot be moved.
 - A bridge restart clears the device queue.
+- At most 500 song ids per call and 1000 tracks in the queue.
 - The audio URLs carry a secret in the path instead of a login, because the device
-  cannot log in. Anyone on the network who sees such a URL can fetch that track. Keep
+  cannot log in. Anyone on the network who sees such a URL can fetch that track, and the
+  WiiM lists its queue, URLs included, to anyone on the network who asks over UPnP. Keep
   the bridge on a trusted network.
 - The control API has the same protection as Navidrome's: a valid Navidrome login on
-  every call.
+  every call. While Navidrome cannot be reached, a login that passed within the last
+  hour keeps working; other calls get code 0 "Navidrome is unreachable", never "wrong
+  username or password", so clients do not sign out.
 
 ## Device notes
 

@@ -14,7 +14,8 @@ spec:
       port: 8098
       targetPort: http
 ---
-# For the amplifier, which fetches audio by IP over plain HTTP.
+# For the amplifier, which fetches audio by IP over plain HTTP. Only the
+# device port (BRIDGE_DEVICE_PORT), which serves nothing but audio and /healthz.
 # The address must be fixed and equal to BRIDGE_ADVERTISE_HOST in configmap.yaml.
 # The annotation below is MetalLB's; other load balancers have their own way
 # to request a fixed address (check their documentation).
@@ -31,6 +32,6 @@ spec:
   selector:
     app.kubernetes.io/name: wiim-bridge
   ports:
-    - name: http
-      port: 8098
-      targetPort: http
+    - name: device
+      port: 8099
+      targetPort: device

@@ -20,7 +20,7 @@ Bridge:
 - `wiim-bridge` Deployment: one pod, strategy `Recreate`.
 - `wiim-bridge` ConfigMap: the non-secret settings.
 - `wiim-bridge` Service (ClusterIP): for an ingress or gateway and in-cluster clients.
-- `wiim-bridge-lan` Service (LoadBalancer): the fixed address the amplifier uses to fetch audio.
+- `wiim-bridge-lan` Service (LoadBalancer): the fixed address the amplifier uses to fetch audio, on port 8099 (`BRIDGE_DEVICE_PORT`), which serves only the audio URLs and `/healthz`.
 
 Web UI:
 
@@ -78,7 +78,7 @@ The Secret `wiim-bridge` is not part of the kustomization. You create it yoursel
    ```sh
    kubectl get pods
    kubectl logs deploy/wiim-bridge
-   curl http://<LoadBalancer address>:8098/healthz
+   curl http://<LoadBalancer address>:8099/healthz
    curl https://music.example.org/healthz
    ```
 
@@ -104,7 +104,7 @@ The bridge works with any Subsonic client that has a jukebox mode and with its o
 
 - Run exactly one bridge replica. Two bridges would fight over the amplifier's queue.
 - A restart or redeploy of the bridge clears the amplifier's queue. Restarting Navidrome or the web UI does not touch it.
-- The amplifier fetches audio by IP over plain HTTP on port 8098. It cannot resolve cluster DNS names or use TLS, so do not put the audio path behind TLS only. Keep the `wiim-bridge-lan` Service.
+- The amplifier fetches audio by IP over plain HTTP on the device port, 8099. It cannot resolve cluster DNS names or use TLS, so do not put the audio path behind TLS only. Keep the `wiim-bridge-lan` Service. Everything else (remote page, jukebox API, Navidrome pass-through) stays on port 8098 behind your ingress or gateway.
 - A browser refuses to call a plain HTTP address from an HTTPS page. That is why the bridge needs HTTPS as soon as the web UI has it.
 - Navidrome keeps its database in `navidrome-data`. Deleting that claim deletes users, playlists and play counts; the music files are never written to.
-- If you use network policies, allow ingress from the amplifier's subnet to port 8098, and egress from the bridge pod to the amplifier on TCP 49152 and 443 and to Navidrome on 4533. Navidrome needs egress to the NFS server. The web UI pod needs ingress on 9180 only.
+- If you use network policies, allow ingress from the amplifier's subnet to port 8099, and egress from the bridge pod to the amplifier on TCP 49152 and 443 and to Navidrome on 4533. Navidrome needs egress to the NFS server. The web UI pod needs ingress on 9180 only.

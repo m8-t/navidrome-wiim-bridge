@@ -8,6 +8,39 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.9.0] - 2026-10-17
+
+### Added
+
+- `BRIDGE_DEVICE_PORT` (`--device-port`): a second port that serves only the audio URLs
+  and `/healthz`, and the port the WiiM is told to fetch from. The example manifests
+  point the LoadBalancer at it (8099), so the plain-HTTP LAN address no longer exposes
+  the remote page, `jukeboxControl` or the Navidrome pass-through.
+
+### Changed
+
+- When Navidrome cannot be reached, `jukeboxControl` answers code 0 "Navidrome is
+  unreachable, try again shortly" instead of code 40 "Wrong username or password", so
+  the remote page no longer signs out and forgets its login when Navidrome restarts. A
+  login that passed within the last hour keeps working during the outage.
+- At start the bridge only exits when Navidrome rejects its login; when Navidrome cannot
+  be reached it logs a warning and starts.
+- Song lookups for `set`, `add` and `insert` run before the jukebox lock, eight at a
+  time, so skip, pause and volume no longer wait while a long mix is being added. Queue
+  edits still apply in the order they arrived.
+- `status` and `get` reuse a device reading younger than one second, so several open
+  pages no longer each query the WiiM.
+- The WiiM's occasional "701 Transition not allowed" on play, pause, skip and seek is
+  retried once after 0.3 seconds.
+- The `get` reply (the whole queue) is gzip-compressed for clients that accept it.
+- At most 500 song ids per call and 1000 tracks in the queue.
+
+### Security
+
+- The Navidrome pass-through answers 400 to request targets that do not start with a
+  single `/` and no longer forwards a client's `Remote-User` header.
+- The login cache keeps at most 256 entries and drops entries older than an hour.
+
 ## [0.8.1] - 2026-10-16
 
 ### Fixed
