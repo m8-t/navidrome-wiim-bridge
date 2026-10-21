@@ -5,6 +5,7 @@ import {
   mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
   playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep, sortAlbumsByYear,
   countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
+  THEME_COLORS, loadTheme, saveTheme, isTheme, parseThemeMessage,
 } from "./logic.js";
 
 const STORAGE_KEY = "wiimRemoteAuth";
@@ -1691,6 +1692,40 @@ function bindPlaylistSheet() {
   });
 }
 
+const embedded = window.parent !== window;
+let parentTheme = null;
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", THEME_COLORS[theme]);
+  for (const button of document.querySelectorAll("#theme-group [data-theme]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.theme === theme));
+  }
+}
+
+function bindTheme() {
+  $("theme-group").hidden = embedded;
+  if (embedded) {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      const theme = parseThemeMessage(event.data);
+      if (!theme) return;
+      parentTheme = theme;
+      applyTheme(theme);
+    });
+  }
+  applyTheme(parentTheme || loadTheme(localStorage));
+  for (const button of document.querySelectorAll("#theme-group [data-theme]")) {
+    button.addEventListener("click", () => {
+      const theme = button.dataset.theme;
+      if (!isTheme(theme)) return;
+      saveTheme(localStorage, theme);
+      applyTheme(theme);
+    });
+  }
+}
+
 function bindSheet() {
   $("open-settings").addEventListener("click", openSettings);
   $("sheet-close").addEventListener("click", () => closeSheet());
@@ -1787,6 +1822,7 @@ function init() {
   bindPlayer();
   bindQueue();
   bindLibrary();
+  bindTheme();
   bindSheet();
   bindMix();
   bindPlaylistSheet();

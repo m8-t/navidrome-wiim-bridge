@@ -456,3 +456,36 @@ export function createViewStack() {
     },
   };
 }
+
+export const THEMES = ["dark", "macchiato", "frappe", "contrast"];
+export const THEME_KEY = "remote-theme";
+export const THEME_COLORS = { dark: "#0d0e11", macchiato: "#24273a", frappe: "#303446", contrast: "#000000" };
+
+export function isTheme(value) {
+  return THEMES.includes(value);
+}
+
+export function loadTheme(storage) {
+  try {
+    const value = storage.getItem(THEME_KEY);
+    return isTheme(value) ? value : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+export function saveTheme(storage, theme) {
+  if (!isTheme(theme)) return false;
+  try {
+    storage.setItem(THEME_KEY, theme);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function parseThemeMessage(data) {
+  if (!data || typeof data !== "object") return null;
+  if (data.type !== "kiosk-theme" || !isTheme(data.theme)) return null;
+  return data.theme;
+}

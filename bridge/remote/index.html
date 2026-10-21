@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#0d0e11">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>WiiM Remote</title>
+<script src="theme-boot.js"></script>
 <link rel="stylesheet" href="remote.css">
 </head>
 <body>
@@ -133,6 +134,15 @@
       <button id="sheet-close" type="button" class="round r44 plain" aria-label="Close" title="Close"><span class="ic" data-icon="close"></span></button>
     </div>
     <p id="sheet-user" class="sub"></p>
+    <div id="theme-group" class="group" role="group" aria-labelledby="theme-label">
+      <span id="theme-label" class="group-label">Appearance</span>
+      <div class="seg seg-2">
+        <button type="button" data-theme="dark" aria-pressed="true">Dark</button>
+        <button type="button" data-theme="macchiato" aria-pressed="false">Macchiato</button>
+        <button type="button" data-theme="frappe" aria-pressed="false">Frappe</button>
+        <button type="button" data-theme="contrast" aria-pressed="false">High contrast</button>
+      </div>
+    </div>
     <label class="switch-row">
       <span class="switch-text">
         <span class="switch-label">Lock screen controls</span>

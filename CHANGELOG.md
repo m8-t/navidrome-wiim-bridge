@@ -8,6 +8,20 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.10.0] - 2026-10-21
+
+### Added
+
+- Color themes for the remote page: Dark (unchanged, the default), Macchiato and Frappe
+  (dimmer Catppuccin palettes with a lighter background) and High contrast (black,
+  white and yellow with visible borders). Pick one under Appearance in the settings; it
+  is stored in the browser and applied before the first paint.
+- When the page runs inside an iframe, the parent page can set the theme with
+  `postMessage({type: "kiosk-theme", theme})`, where `theme` is
+  `dark`, `macchiato`, `frappe` or `contrast`. Only messages from the parent window are
+  accepted. The choice is not stored, wins over the stored theme and hides the
+  Appearance row.
+
 ## [0.9.0] - 2026-10-17
 
 ### Added

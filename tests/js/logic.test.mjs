@@ -9,6 +9,7 @@ import {
   needsEntries, isAddOnly, isBarrier, createLanes,
   insertCalls, playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep,
   sortAlbumsByYear, countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
+  THEMES, THEME_KEY, isTheme, loadTheme, saveTheme, parseThemeMessage,
 } from "../../bridge/remote/logic.js";
 
 const ids = (n) => Array.from({ length: n }, (_, i) => `id${i}`);
@@ -782,4 +783,43 @@ test("createViewStack clear keeps the list scroll, reset forgets it", () => {
   stack.reset();
   assert.equal(stack.depth(), 0);
   assert.equal(stack.rootScroll(), 0);
+});
+
+const fakeStorage = (initial = {}) => {
+  const data = { ...initial };
+  return { getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => { data[k] = String(v); } };
+};
+const brokenStorage = () => ({
+  getItem() { throw new Error("denied"); },
+  setItem() { throw new Error("denied"); },
+});
+
+test("themes list and isTheme", () => {
+  assert.deepEqual(THEMES, ["dark", "macchiato", "frappe", "contrast"]);
+  for (const name of THEMES) assert.equal(isTheme(name), true);
+  for (const bad of ["light", "", null, undefined, 1, "Dark"]) assert.equal(isTheme(bad), false);
+});
+
+test("loadTheme falls back to dark", () => {
+  assert.equal(loadTheme(fakeStorage()), "dark");
+  assert.equal(loadTheme(fakeStorage({ [THEME_KEY]: "light" })), "dark");
+  assert.equal(loadTheme(fakeStorage({ [THEME_KEY]: "frappe" })), "frappe");
+  assert.equal(loadTheme(brokenStorage()), "dark");
+});
+
+test("saveTheme roundtrip and failures", () => {
+  const storage = fakeStorage();
+  assert.equal(saveTheme(storage, "macchiato"), true);
+  assert.equal(loadTheme(storage), "macchiato");
+  assert.equal(saveTheme(storage, "light"), false);
+  assert.equal(loadTheme(storage), "macchiato");
+  assert.equal(saveTheme(brokenStorage(), "contrast"), false);
+});
+
+test("parseThemeMessage", () => {
+  assert.equal(parseThemeMessage({ type: "kiosk-theme", theme: "contrast" }), "contrast");
+  assert.equal(parseThemeMessage({ type: "other", theme: "dark" }), null);
+  assert.equal(parseThemeMessage({ type: "kiosk-theme", theme: "light" }), null);
+  assert.equal(parseThemeMessage({ type: "kiosk-theme" }), null);
+  for (const bad of [null, undefined, "kiosk-theme", 5, true]) assert.equal(parseThemeMessage(bad), null);
 });

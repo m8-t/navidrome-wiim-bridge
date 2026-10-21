@@ -239,7 +239,7 @@ def device_port_only(device_port: int) -> Middleware:
 
 
 REMOTE_DIR = Path(__file__).resolve().parent / "remote"
-REMOTE_FILES = ("index.html", "remote.css", "remote.js", "logic.js", "md5.js")
+REMOTE_FILES = ("index.html", "remote.css", "remote.js", "logic.js", "md5.js", "theme-boot.js")
 REMOTE_HEADERS = {"Cache-Control": "no-cache"}
 
 

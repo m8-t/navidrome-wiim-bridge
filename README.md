@@ -294,6 +294,10 @@ controls for a page that plays sound itself, so with this switched on the page p
 silence on the phone and passes your taps on to the bridge. Other audio on the phone
 pauses while it is on. The switch is in the page's settings and is off by default.
 
+The page has four color themes (Dark, Macchiato, Frappe, High contrast), chosen under
+Appearance in the settings. Embedded in an iframe, the parent page can set the theme
+with `postMessage({type: "kiosk-theme", theme: "dark" | "macchiato" | "frappe" | "contrast"})`.
+
 **From the remote:** nothing to set up.
 
 ## Limits
