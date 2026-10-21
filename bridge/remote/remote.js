@@ -1580,7 +1580,7 @@ async function playMix() {
     }
     const calls = mixCalls(songs.map((song) => song.id));
     if (!(await runCommands(calls.slice(0, MIX_HEAD_CALLS)))) return;
-    if (short) showStatus(`Mix has ${songs.length} songs (interludes skipped)`, true);
+    if (short) showStatus(`Mix has ${songs.length} songs (interludes and acapellas skipped)`, true);
     else hideStatus();
     closeSheet();
     setTab("player");

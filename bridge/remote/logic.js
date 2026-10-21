@@ -281,7 +281,7 @@ export function mergeRandom(lists, count, rng = Math.random) {
   return songs.slice(0, Math.max(0, count));
 }
 
-const INTERLUDE_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude)s?(?![\p{L}\p{N}])/iu;
+const INTERLUDE_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude|a[ -]?cap+ella)s?(?![\p{L}\p{N}])/iu;
 
 export function isInterlude(title) {
   return typeof title === "string" && INTERLUDE_RE.test(title);

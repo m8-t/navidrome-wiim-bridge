@@ -8,6 +8,12 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.10.2] - 2026-10-21
+
+### Added
+
+- The random mix's skip option now also drops acapella tracks ("Acapella", "A Cappella"), next to intros, outros, skits and interludes.
+
 ## [0.10.1] - 2026-10-21
 
 ### Changed

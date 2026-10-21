@@ -548,10 +548,10 @@ test("lanes: a failing batch does not wedge its lane", async () => {
 });
 
 test("isInterlude matches whole words only", () => {
-  for (const t of ["Intro", "intro", "Outro (feat. X)", "Skit", "Interlude: Love", "The Interlude", "Intro - Live", "Skit #2", "Interludes of Sorrow", "SKITS", "Outros", "Éxito Intro"]) {
+  for (const t of ["Intro", "intro", "Outro (feat. X)", "Skit", "Interlude: Love", "The Interlude", "Intro - Live", "Skit #2", "Interludes of Sorrow", "SKITS", "Outros", "Éxito Intro", "Acapella", "Song (A Cappella)", "Track - a cappella version", "Acappella", "A-capella"]) {
     assert.equal(isInterlude(t), true, t);
   }
-  for (const t of ["Introduction", "Outrospective", "Skittles", "Retro", "Intron", "Éintro", "intro2", "", null, undefined, 5]) {
+  for (const t of ["Introduction", "Outrospective", "Skittles", "Retro", "Intron", "Éintro", "Capella", "Acapellar", "intro2", "", null, undefined, 5]) {
     assert.equal(isInterlude(t), false, String(t));
   }
 });
