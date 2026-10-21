@@ -34,11 +34,11 @@
   --dim-bg: rgb(24 25 38 / 0.7); --shadow: rgb(24 25 38 / 0.6);
 }
 :root[data-theme="frappe"] {
-  --bg: #303446; --surface: #292c3c; --raised: #414559; --line: #51576d;
-  --text: #c6d0f5; --dim: #a5adce; --accent: #8caaee; --on-accent: #232634; --danger: #e78284;
-  --scrim: 48 52 70; --toast-bg: #4f2f3a; --toast-text: #f2d5cf;
-  --track: rgb(198 208 245 / 0.22); --track-dim: rgb(198 208 245 / 0.15);
-  --dim-bg: rgb(35 38 52 / 0.7); --shadow: rgb(35 38 52 / 0.6);
+  --bg: #3f4459; --surface: #373c50; --raised: #505570; --line: #61687f;
+  --text: #d3dbfa; --dim: #b4bcd9; --accent: #8caaee; --on-accent: #2e3247; --danger: #e78284;
+  --scrim: 63 68 89; --toast-bg: #4f2f3a; --toast-text: #f2d5cf;
+  --track: rgb(211 219 250 / 0.22); --track-dim: rgb(211 219 250 / 0.15);
+  --dim-bg: rgb(46 50 71 / 0.7); --shadow: rgb(46 50 71 / 0.6);
 }
 :root[data-theme="contrast"] {
   --bg: #000; --surface: #000; --raised: #1a1a1a; --line: #fff;

@@ -8,6 +8,12 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.10.1] - 2026-10-21
+
+### Changed
+
+- Frappe theme is a step brighter (background #3f4459, lighter text), still a dimmed palette.
+
 ## [0.10.0] - 2026-10-21
 
 ### Added

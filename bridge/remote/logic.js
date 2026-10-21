@@ -459,7 +459,7 @@ export function createViewStack() {
 
 export const THEMES = ["dark", "macchiato", "frappe", "contrast"];
 export const THEME_KEY = "remote-theme";
-export const THEME_COLORS = { dark: "#0d0e11", macchiato: "#24273a", frappe: "#303446", contrast: "#000000" };
+export const THEME_COLORS = { dark: "#0d0e11", macchiato: "#24273a", frappe: "#3f4459", contrast: "#000000" };
 
 export function isTheme(value) {
   return THEMES.includes(value);

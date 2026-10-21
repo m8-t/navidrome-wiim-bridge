@@ -16,6 +16,6 @@ images:
   - name: deluan/navidrome
     newTag: 0.64.2
   - name: ghcr.io/m8-t/navidrome-wiim-bridge
-    newTag: 0.10.0
+    newTag: 0.10.1
   - name: ghcr.io/m8-t/feishin-jukebox
     newTag: 1.17.0-jukebox
