@@ -8,6 +8,13 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.11.0] - 2026-10-21
+
+### Changed
+
+- The random mix sheet now shows about a dozen genre buckets (Hip Hop, Gangsta, Deutschrap, R&B / Soul, Rock, Electronic and so on) instead of one chip per raw Navidrome tag. Spelling variants such as "Hip-Hop", "Hip Hop" and "Rap/Hip Hop" share one chip, and numeric or placeholder tags ("7", "Divers") are hidden. A picked bucket draws from its eight largest raw genres.
+- A mix across several genres now takes songs from each of them in turn, so one large genre no longer crowds out the others. Genres saved by earlier versions are ignored.
+
 ## [0.10.2] - 2026-10-21
 
 ### Added

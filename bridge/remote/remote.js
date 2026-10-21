@@ -1,5 +1,5 @@
 import {
-  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, collectMix, playCalls, addCalls,
+  makeAuth, apiParams, formatTime, previousTarget, nextTarget, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, collectMix, bucketGenres, bucketFetchGenres, playCalls, addCalls,
   estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
@@ -1514,11 +1514,11 @@ function updateGenreHint() {
 function renderGenres(genres, picked) {
   const box = $("mix-genres");
   box.replaceChildren();
-  for (const genre of genres) {
-    const chip = el("button", "chip", genre.value);
+  for (const bucket of genres) {
+    const chip = el("button", "chip", bucket.name);
     chip.type = "button";
-    chip.dataset.genre = genre.value;
-    chip.setAttribute("aria-pressed", String(picked.includes(genre.value)));
+    chip.dataset.genre = bucket.name;
+    chip.setAttribute("aria-pressed", String(picked.includes(bucket.name)));
     box.append(chip);
   }
   updateGenreHint();
@@ -1532,9 +1532,7 @@ async function loadGenres(picked) {
   try {
     const body = await api("getGenres");
     const list = (body.genres && body.genres.genre) || [];
-    mixGenres = [...list]
-      .filter((g) => g && g.value)
-      .sort((a, b) => (b.songCount || 0) - (a.songCount || 0));
+    mixGenres = bucketGenres(list);
     renderGenres(mixGenres, picked);
   } catch (err) {
     handleError(err);
@@ -1568,7 +1566,10 @@ async function playMix() {
   showStatus("Loading mix\u2026", true);
   try {
     const base = { count: choice.count, fromYear: choice.fromYear, toYear: choice.toYear };
-    const genres = choice.genres.length ? choice.genres : [undefined];
+    const known = new Map((mixGenres || []).map((bucket) => [bucket.name, bucket]));
+    const genres = choice.genres.length
+      ? choice.genres.flatMap((name) => (known.has(name) ? bucketFetchGenres(known.get(name)) : []))
+      : [undefined];
     const { songs, short } = await collectMix(
       () => Promise.all(genres.map((genre) => fetchRandom(randomSongParams({ ...base, genre })))),
       choice.count,

@@ -9,6 +9,7 @@ import {
   needsEntries, isAddOnly, isBarrier, createLanes,
   insertCalls, playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep,
   sortAlbumsByYear, countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
+  bucketGenres, bucketFetchGenres,
   THEMES, THEME_KEY, isTheme, loadTheme, saveTheme, parseThemeMessage,
 } from "../../bridge/remote/logic.js";
 
@@ -366,7 +367,7 @@ test("mergeRandom dedupes, shuffles deterministically and cuts", () => {
   assert.deepEqual(merged, mergeRandom([a, b], 10, seeded(7)));
   assert.notDeepEqual(merged.map((s) => s.id), mergeRandom([a, b], 10, seeded(8)).map((s) => s.id));
   assert.equal(mergeRandom([a, b], 2, seeded(7)).length, 2);
-  assert.deepEqual(mergeRandom([a, b], 2, seeded(7)), merged.slice(0, 2));
+  assert.ok(mergeRandom([a, b], 2, seeded(7)).every((s) => merged.some((m) => m.id === s.id)));
   assert.deepEqual(mergeRandom([], 5), []);
   assert.deepEqual(mergeRandom([a], 0), []);
 });
@@ -822,4 +823,67 @@ test("parseThemeMessage", () => {
   assert.equal(parseThemeMessage({ type: "kiosk-theme", theme: "light" }), null);
   assert.equal(parseThemeMessage({ type: "kiosk-theme" }), null);
   for (const bad of [null, undefined, "kiosk-theme", 5, true]) assert.equal(parseThemeMessage(bad), null);
+});
+
+const RAW = {
+  "Hip Hop": ["Hip-Hop", "Hip Hop", "Rap", "Rap/Hip Hop", "Pop Rap", "Hardcore Hip-Hop", "Dirty South", "Instrumental Hip Hop", "Alternative Hip Hop", "Horrorcore"],
+  Gangsta: ["Gangsta Rap", "Gangsta", "Thug Rap"],
+  Deutschrap: ["Deutschrap", "Deutsch-Rap"],
+  "R&B / Soul": ["R&B", "Contemporary R&B", "Neo Soul", "Soul"],
+  Rock: ["Funk Rock"],
+  Funk: ["Funk", "Funk / Soul"],
+  Soundtrack: ["Soundtrack", "Game", "Musiques de films"],
+  "World / Reggae": ["world.music"],
+  Instrumental: ["Instrumental"],
+  Other: ["Zydeco"],
+};
+const JUNK = ["7", "Divers"];
+
+test("bucketGenres puts every raw tag in exactly one expected bucket", () => {
+  const raw = [];
+  let n = 1;
+  for (const values of Object.values(RAW)) for (const value of values) raw.push({ value, songCount: n++ });
+  for (const value of JUNK) raw.push({ value, songCount: 999 });
+  const buckets = bucketGenres(raw);
+  for (const [name, values] of Object.entries(RAW)) {
+    const bucket = buckets.find((b) => b.name === name);
+    assert.ok(bucket, name);
+    for (const value of values) assert.ok(bucket.genres.includes(value), `${value} in ${name}`);
+  }
+  const all = buckets.flatMap((b) => b.genres);
+  assert.equal(all.length, new Set(all).size);
+  assert.equal(all.length, raw.length - JUNK.length);
+  for (const value of JUNK) assert.ok(!all.includes(value), value);
+});
+
+test("bucketGenres sorts by song count with Other last and tolerates missing counts", () => {
+  const buckets = bucketGenres([
+    { value: "Zydeco", songCount: 5000 },
+    { value: "Jazz", songCount: 10 },
+    { value: "Rock", songCount: 30 },
+    { value: "Blues" },
+    { value: "Hard Rock", songCount: 40 },
+  ]);
+  assert.deepEqual(buckets.map((b) => b.name), ["Rock", "Jazz", "Other"]);
+  assert.deepEqual(buckets[0], { name: "Rock", genres: ["Hard Rock", "Rock"], songCount: 70 });
+  assert.deepEqual(buckets[1].genres, ["Jazz", "Blues"]);
+  assert.deepEqual(bucketGenres([]), []);
+  assert.deepEqual(bucketGenres(undefined), []);
+});
+
+test("bucketFetchGenres caps at max and keeps the songCount order", () => {
+  const raw = Array.from({ length: 12 }, (_, i) => ({ value: `Hip Hop ${i}`, songCount: i }));
+  const [bucket] = bucketGenres(raw);
+  const fetched = bucketFetchGenres(bucket);
+  assert.equal(fetched.length, 8);
+  assert.deepEqual(fetched, ["Hip Hop 11", "Hip Hop 10", "Hip Hop 9", "Hip Hop 8", "Hip Hop 7", "Hip Hop 6", "Hip Hop 5", "Hip Hop 4"]);
+  assert.deepEqual(bucketFetchGenres(bucket, 2), ["Hip Hop 11", "Hip Hop 10"]);
+});
+
+test("mergeRandom spreads the result across lists instead of favouring the largest", () => {
+  const big = Array.from({ length: 100 }, (_, i) => ({ id: `b${i}` }));
+  const small = Array.from({ length: 10 }, (_, i) => ({ id: `s${i}` }));
+  const merged = mergeRandom([big, small], 20, seeded(5));
+  assert.equal(merged.length, 20);
+  assert.equal(merged.filter((s) => s.id.startsWith("s")).length, 10);
 });

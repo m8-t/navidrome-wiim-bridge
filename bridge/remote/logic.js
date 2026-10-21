@@ -267,18 +267,102 @@ export function randomSongParams({ count, fromYear, toYear, genre } = {}) {
 }
 
 export function mergeRandom(lists, count, rng = Math.random) {
+  const shuffle = (items) => {
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [items[i], items[j]] = [items[j], items[i]];
+    }
+    return items;
+  };
   const seen = new Set();
-  const songs = [];
-  for (const song of lists.flat()) {
-    if (seen.has(song.id)) continue;
-    seen.add(song.id);
-    songs.push(song);
+  const pools = lists.map((list) => {
+    const fresh = [];
+    for (const song of list) {
+      if (seen.has(song.id)) continue;
+      seen.add(song.id);
+      fresh.push(song);
+    }
+    return shuffle(fresh);
+  });
+  const limit = Math.max(0, count);
+  const picked = [];
+  // round robin keeps one large list from crowding out the others
+  for (let round = 0; picked.length < limit; round++) {
+    let any = false;
+    for (const pool of pools) {
+      if (round >= pool.length) continue;
+      any = true;
+      if (picked.length < limit) picked.push(pool[round]);
+    }
+    if (!any) break;
   }
-  for (let i = songs.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [songs[i], songs[j]] = [songs[j], songs[i]];
+  return shuffle(picked);
+}
+
+const normalizeGenre = (value) =>
+  String(value ?? "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+const JUNK_GENRE_RE = /^(?:\d+|divers|other|unknown|misc|none)?$/;
+
+// first match wins, so the specific hip hop buckets come before R&B, Rock and Pop
+export const GENRE_BUCKETS = [
+  { name: "Deutschrap", test: /deutsch|german (?:hip hop|rap)/ },
+  { name: "Gangsta", test: /gangsta|gangster|thug|g funk|gfunk|mafioso|street rap/ },
+  {
+    name: "Hip Hop",
+    test: /hip hop|hiphop|\brap\b|\btrap\b|boom bap|crunk|dirty south|east coast|west coast|\bdrill\b|grime|conscious|turntablism|\bscrewed?\b|horrorcore/,
+  },
+  { name: "Funk", test: /^(?!.*\b(?:rock|metal|punk)\b).*\bfunk\b/ },
+  { name: "R&B / Soul", test: /\br b\b|\brnb\b|rhythm and blues|\bsoul\b|motown/ },
+  { name: "Rock", test: /\brock\b|\bmetal\b|punk|grunge|hardcore|\bfunk\b/ },
+  { name: "Pop", test: /\bk?pop\b/ },
+  {
+    name: "Electronic",
+    test: /electr|\bhouse\b|techno|\bdance\b|\bedm\b|bass music|dubstep|drum (?:and|n) bass|\bdnb\b|trance|ambient/,
+  },
+  { name: "Jazz", test: /jazz|blues|swing|bossa/ },
+  {
+    name: "Soundtrack",
+    test: /soundtrack|\bscore\b|\bfilms?\b|\bgames?\b|musiques? de films?|jeux vid|stage (?:and )?screen/,
+  },
+  { name: "Instrumental", test: /\binstrumental\b/ },
+  { name: "World / Reggae", test: /reggae|dancehall|latin|world|afro|folk|country|caribbean/ },
+  { name: "Other", test: /./ },
+];
+
+function bucketOf(raw) {
+  const text = normalizeGenre(raw);
+  if (JUNK_GENRE_RE.test(text)) return null;
+  return GENRE_BUCKETS.find((bucket) => bucket.test.test(text)).name;
+}
+
+const bySongCount = (a, b) => (b.songCount || 0) - (a.songCount || 0);
+
+export function bucketGenres(rawGenres) {
+  const groups = new Map();
+  for (const entry of rawGenres || []) {
+    if (!entry || typeof entry.value !== "string") continue;
+    const name = bucketOf(entry.value);
+    if (!name) continue;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(entry);
   }
-  return songs.slice(0, Math.max(0, count));
+  return GENRE_BUCKETS.filter((bucket) => groups.has(bucket.name))
+    .map((bucket) => {
+      const entries = groups.get(bucket.name).sort(bySongCount);
+      return {
+        name: bucket.name,
+        genres: entries.map((entry) => entry.value),
+        songCount: entries.reduce((sum, entry) => sum + (Number(entry.songCount) || 0), 0),
+        entries,
+      };
+    })
+    .sort((a, b) => (a.name === "Other") - (b.name === "Other") || b.songCount - a.songCount)
+    .map(({ entries, ...bucket }) => bucket);
+}
+
+export function bucketFetchGenres(bucket, max = 8) {
+  return (bucket.genres || []).slice(0, Math.max(0, max));
 }
 
 const INTERLUDE_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude|a[ -]?cap+ella)s?(?![\p{L}\p{N}])/iu;
@@ -294,21 +378,28 @@ export async function collectMix(fetchRound, count, skipInterludes, rng = Math.r
   if (!skipInterludes) return { songs: mergeRandom(first, count, rng), short: false };
   const seen = new Set();
   const kept = [];
+  let total = 0;
   const take = (lists) => {
     let fresh = 0;
-    for (const song of lists.flat()) {
-      if (seen.has(song.id)) continue;
-      seen.add(song.id);
-      fresh++;
-      if (!isInterlude(song.title)) kept.push(song);
-    }
+    lists.forEach((list, i) => {
+      kept[i] ??= [];
+      for (const song of list) {
+        if (seen.has(song.id)) continue;
+        seen.add(song.id);
+        fresh++;
+        if (!isInterlude(song.title)) {
+          kept[i].push(song);
+          total++;
+        }
+      }
+    });
     return fresh;
   };
   take(first);
-  for (let round = 0; round < MIX_EXTRA_ROUNDS && kept.length < count; round++) {
+  for (let round = 0; round < MIX_EXTRA_ROUNDS && total < count; round++) {
     if (!take(await fetchRound())) break;
   }
-  return { songs: mergeRandom([kept], count, rng), short: kept.length < count };
+  return { songs: mergeRandom(kept, count, rng), short: total < count };
 }
 
 const REFRESHING_ACTIONS = new Set(["set", "add", "insert", "move", "setShuffle", "remove", "clear"]);
