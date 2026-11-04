@@ -8,6 +8,17 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.12.0] - 2026-11-04
+
+### Added
+
+- The random mix sheet has a new "Skip instrumentals" switch that drops tracks with "Instrumental" in the title.
+
+### Changed
+
+- The mix skip option now also drops any track under 1 minute, and intros, outros, skits, interludes, preludes, postludes, intermissions, commercials and interviews only when they are shorter than 90 seconds, so full-length songs such as "Prelude to a Kiss" stay in. Acapellas are skipped at any length.
+- The "short mix" message now reads "some tracks skipped".
+
 ## [0.11.0] - 2026-10-21
 
 ### Changed

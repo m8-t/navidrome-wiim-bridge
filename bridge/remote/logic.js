@@ -365,17 +365,34 @@ export function bucketFetchGenres(bucket, max = 8) {
   return (bucket.genres || []).slice(0, Math.max(0, max));
 }
 
-const INTERLUDE_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude|a[ -]?cap+ella)s?(?![\p{L}\p{N}])/iu;
+const ACAPELLA_RE = /(?<![\p{L}\p{N}])a[ -]?cap+ellas?(?![\p{L}\p{N}])/iu;
+const KEYWORD_RE = /(?<![\p{L}\p{N}])(?:intro|outro|skit|interlude|prelude|postlude|intermission|commercial|interview|zwischenspiel)s?(?![\p{L}\p{N}])/iu;
+const INSTRUMENTAL_RE = /(?<![\p{L}\p{N}])instrumentals?(?![\p{L}\p{N}])/iu;
 
-export function isInterlude(title) {
-  return typeof title === "string" && INTERLUDE_RE.test(title);
+export const MIX_MIN_SECONDS = 60;
+export const MIX_KEYWORD_MAX_SECONDS = 90;
+
+export function isInterlude(song) {
+  const title = song && song.title;
+  if (typeof title !== "string") return false;
+  if (ACAPELLA_RE.test(title)) return true;
+  const raw = song.duration;
+  const duration = typeof raw === "number" && Number.isFinite(raw) ? raw : null;
+  if (duration !== null && duration < MIX_MIN_SECONDS) return true;
+  if (!KEYWORD_RE.test(title)) return false;
+  return duration === null || duration < MIX_KEYWORD_MAX_SECONDS;
+}
+
+export function isInstrumental(song) {
+  return !!song && typeof song.title === "string" && INSTRUMENTAL_RE.test(song.title);
 }
 
 export const MIX_EXTRA_ROUNDS = 3;
 
-export async function collectMix(fetchRound, count, skipInterludes, rng = Math.random) {
+export async function collectMix(fetchRound, count, filters = {}, rng = Math.random) {
+  const { skipInterludes = false, skipInstrumentals = false } = filters || {};
   const first = await fetchRound();
-  if (!skipInterludes) return { songs: mergeRandom(first, count, rng), short: false };
+  if (!skipInterludes && !skipInstrumentals) return { songs: mergeRandom(first, count, rng), short: false };
   const seen = new Set();
   const kept = [];
   let total = 0;
@@ -387,7 +404,7 @@ export async function collectMix(fetchRound, count, skipInterludes, rng = Math.r
         if (seen.has(song.id)) continue;
         seen.add(song.id);
         fresh++;
-        if (!isInterlude(song.title)) {
+        if (!(skipInterludes && isInterlude(song)) && !(skipInstrumentals && isInstrumental(song))) {
           kept[i].push(song);
           total++;
         }

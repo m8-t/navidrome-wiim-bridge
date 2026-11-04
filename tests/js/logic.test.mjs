@@ -5,7 +5,7 @@ import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
   addCalls, estimatePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
-  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, isInterlude, collectMix, needsRefresh, reconcilePosition,
+  mediaMetadataInit, positionState, flowTileStyle, flowPosition, flowVelocity, flowTarget, nextPage, mixCalls, randomSongParams, mergeRandom, isInterlude, isInstrumental, collectMix, needsRefresh, reconcilePosition,
   needsEntries, isAddOnly, isBarrier, createLanes,
   insertCalls, playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep,
   sortAlbumsByYear, countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
@@ -548,13 +548,46 @@ test("lanes: a failing batch does not wedge its lane", async () => {
   assert.equal(lanes.pendingMain(), 0);
 });
 
-test("isInterlude matches whole words only", () => {
-  for (const t of ["Intro", "intro", "Outro (feat. X)", "Skit", "Interlude: Love", "The Interlude", "Intro - Live", "Skit #2", "Interludes of Sorrow", "SKITS", "Outros", "Éxito Intro", "Acapella", "Song (A Cappella)", "Track - a cappella version", "Acappella", "A-capella"]) {
-    assert.equal(isInterlude(t), true, t);
+test("isInterlude applies title keywords, acapellas and length rules", () => {
+  const cases = [
+    ["Song (Acapella)", 240, true],
+    ["Track - a cappella version", 200, true],
+    ["A-capella", undefined, true],
+    ["Prelude to a Kiss", 127, false],
+    ["The Prelude", 163, false],
+    ["Being on Point (Prelude)", 49, true],
+    ["Bowtie (postlude)", 35, true],
+    ["Intermission", 75, true],
+    ["Skit A (Interview) / Watch What You Say", 303, false],
+    ["Do Not Fire!", 52, true],
+    ["Dedication", undefined, false],
+    ["Skit", undefined, true],
+    ["Skit", "n/a", true],
+    ["Introduction", 200, false],
+    ["Introduction", 70, false],
+    ["Mar'lude", 70, false],
+    ["Fibilude", 70, false],
+    ["Zwischenspiel", 80, true],
+    ["Commercials", 70, true],
+    ["Outros", 89, true],
+    ["Outro", 90, false],
+    ["Éxito Intro", 30, true],
+    ["Éintro", 70, false],
+    ["Normal", 60, false],
+    ["", undefined, false],
+  ];
+  for (const [title, duration, want] of cases) {
+    assert.equal(isInterlude({ title, duration }), want, `${title} ${duration}`);
   }
-  for (const t of ["Introduction", "Outrospective", "Skittles", "Retro", "Intron", "Éintro", "Capella", "Acapellar", "intro2", "", null, undefined, 5]) {
-    assert.equal(isInterlude(t), false, String(t));
-  }
+  assert.equal(isInterlude({ duration: 10 }), false);
+  assert.equal(isInterlude(null), false);
+});
+
+test("isInstrumental matches whole words only", () => {
+  assert.equal(isInstrumental({ title: "Exklusivinterview (Instrumental)" }), true);
+  assert.equal(isInstrumental({ title: "Instrumentals" }), true);
+  assert.equal(isInstrumental({ title: "Instrumentally" }), false);
+  assert.equal(isInstrumental({}), false);
 });
 
 const pool = (prefix, n, bad = 0) =>
@@ -563,7 +596,7 @@ const pool = (prefix, n, bad = 0) =>
 test("collectMix without the option fetches once and merges as before", async () => {
   let calls = 0;
   const lists = [pool("a", 6, 3), pool("b", 4)];
-  const { songs, short } = await collectMix(async () => (calls++, lists), 5, false, seeded(3));
+  const { songs, short } = await collectMix(async () => (calls++, lists), 5, {}, seeded(3));
   assert.equal(calls, 1);
   assert.equal(short, false);
   assert.deepEqual(songs, mergeRandom(lists, 5, seeded(3)));
@@ -572,18 +605,18 @@ test("collectMix without the option fetches once and merges as before", async ()
 test("collectMix filters and tops up until count is reached", async () => {
   let round = 0;
   const fetchRound = async () => [pool(`r${round++}_`, 10, 5)];
-  const { songs, short } = await collectMix(fetchRound, 8, true, seeded(1));
+  const { songs, short } = await collectMix(fetchRound, 8, { skipInterludes: true }, seeded(1));
   assert.equal(round, 2);
   assert.equal(songs.length, 8);
   assert.equal(short, false);
-  assert.ok(songs.every((s) => !isInterlude(s.title)));
+  assert.ok(songs.every((s) => !isInterlude(s)));
   assert.equal(new Set(songs.map((s) => s.id)).size, 8);
 });
 
 test("collectMix gives up after three extra rounds and reports short", async () => {
   let round = 0;
   const fetchRound = async () => [pool(`r${round++}_`, 4, 3)];
-  const { songs, short } = await collectMix(fetchRound, 50, true, seeded(1));
+  const { songs, short } = await collectMix(fetchRound, 50, { skipInterludes: true }, seeded(1));
   assert.equal(round, 4);
   assert.equal(songs.length, 4);
   assert.equal(short, true);
@@ -592,10 +625,24 @@ test("collectMix gives up after three extra rounds and reports short", async () 
 test("collectMix dedupes across rounds and stops when nothing new arrives", async () => {
   let round = 0;
   const same = [pool("x", 5, 1), pool("y", 2)];
-  const { songs, short } = await collectMix(async () => (round++, same), 20, true);
+  const { songs, short } = await collectMix(async () => (round++, same), 20, { skipInterludes: true });
   assert.equal(round, 2);
   assert.equal(songs.length, 6);
   assert.equal(short, true);
+});
+
+test("collectMix filters instrumentals and combines with interlude skipping", async () => {
+  const lists = [[
+    { id: "1", title: "Song", duration: 200 },
+    { id: "2", title: "Song (Instrumental)", duration: 200 },
+    { id: "3", title: "Skit", duration: 30 },
+    { id: "4", title: "Other", duration: 200 },
+  ]];
+  const ids = async (filters) => (await collectMix(async () => lists, 10, filters, seeded(1))).songs.map((s) => s.id).sort();
+  assert.deepEqual(await ids({ skipInstrumentals: true }), ["1", "3", "4"]);
+  assert.deepEqual(await ids({ skipInterludes: true }), ["1", "2", "4"]);
+  assert.deepEqual(await ids({ skipInterludes: true, skipInstrumentals: true }), ["1", "4"]);
+  assert.deepEqual(await ids({}), ["1", "2", "3", "4"]);
 });
 
 test("insertCalls reverses the chunks and keeps each chunk in order", () => {

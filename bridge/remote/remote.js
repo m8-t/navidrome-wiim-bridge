@@ -1471,7 +1471,7 @@ function closeSheet(restoreFocus = true) {
 }
 
 function loadMixChoice() {
-  const fallback = { count: 500, fromYear: "", toYear: "", genres: [], skipInterludes: false };
+  const fallback = { count: 500, fromYear: "", toYear: "", genres: [], skipInterludes: false, skipInstrumentals: false };
   try {
     const data = JSON.parse(localStorage.getItem(MIX_KEY));
     if (!data || typeof data !== "object") return fallback;
@@ -1481,6 +1481,7 @@ function loadMixChoice() {
       toYear: String(data.toYear ?? ""),
       genres: Array.isArray(data.genres) ? data.genres.filter((g) => typeof g === "string") : [],
       skipInterludes: data.skipInterludes === true,
+      skipInstrumentals: data.skipInstrumentals === true,
     };
   } catch {
     return fallback;
@@ -1503,6 +1504,7 @@ function readMixChoice() {
     toYear: $("mix-to").value.trim(),
     genres: [...document.querySelectorAll("#mix-genres [aria-pressed='true']")].map((b) => b.dataset.genre),
     skipInterludes: $("mix-skip").checked,
+    skipInstrumentals: $("mix-skip-instrumental").checked,
   };
 }
 
@@ -1547,6 +1549,7 @@ function openMix() {
   $("mix-from").value = choice.fromYear;
   $("mix-to").value = choice.toYear;
   $("mix-skip").checked = choice.skipInterludes;
+  $("mix-skip-instrumental").checked = choice.skipInstrumentals;
   showSheet($("mix-sheet"));
   loadGenres(choice.genres);
 }
@@ -1573,7 +1576,7 @@ async function playMix() {
     const { songs, short } = await collectMix(
       () => Promise.all(genres.map((genre) => fetchRandom(randomSongParams({ ...base, genre })))),
       choice.count,
-      choice.skipInterludes,
+      { skipInterludes: choice.skipInterludes, skipInstrumentals: choice.skipInstrumentals },
     );
     if (!songs.length) {
       showStatus("No songs match these filters");
@@ -1581,7 +1584,7 @@ async function playMix() {
     }
     const calls = mixCalls(songs.map((song) => song.id));
     if (!(await runCommands(calls.slice(0, MIX_HEAD_CALLS)))) return;
-    if (short) showStatus(`Mix has ${songs.length} songs (interludes and acapellas skipped)`, true);
+    if (short) showStatus(`Mix has ${songs.length} songs (some tracks skipped)`, true);
     else hideStatus();
     closeSheet();
     setTab("player");
