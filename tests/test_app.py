@@ -1,6 +1,7 @@
 import asyncio
 import dataclasses
 import gzip
+import hashlib
 import json
 import logging
 import os
@@ -18,12 +19,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from test_player import FakeWiim
 
+import bridge
 from bridge import log as bridge_log
 from bridge import startup
+from bridge.jukebox import error_envelope
 from bridge.log import parse_level, setup_logging
 from bridge.subsonic import AuthResult, ConfigError
 from bridge.wiim import device_urls
-from bridge.proxy import RequestLog
 from bridge.app import (
     AUTH_CACHE_MAX,
     AUTH_CACHE_SECONDS,
@@ -69,7 +71,7 @@ class FakeNavidrome:
         self.down = False
         self.revoked = False
         self.ping_reply: Any = None
-        self.app = web.Application()
+        self.app = web.Application(client_max_size=16 * 1024 * 1024)
         for path in ("/rest/ping", "/rest/ping.view"):
             self.app.router.add_get(path, self.ping)
         self.app.router.add_get("/rest/getSong", self.get_song)
@@ -127,6 +129,8 @@ class FakeNavidrome:
 
     async def scrobble(self, request: web.Request) -> web.Response:
         await self._record(request)
+        if request.query.get("id") == "junk":
+            return web.Response(text="not json")
         good = request.query.get("id") != "bad"
         return web.json_response(self.envelope("ok" if good else "failed"))
 
@@ -166,7 +170,6 @@ def make_config(navidrome_url: str, tmp_path: Path) -> BridgeConfig:
         secret="SECRET",
         advertise_host="10.0.0.5",
         port=9001,
-        log_path=tmp_path / "log.jsonl",
         device_base="http://device.invalid",
         status_url="http://device.invalid/status",
     )
@@ -226,6 +229,15 @@ def test_get_song() -> None:
         assert first["query"]["id"] == "a"
         assert first["query"]["s"] == "abcd"
         assert first["headers"]["Accept-Encoding"] == "identity"
+
+    with_client(scenario)
+
+
+def test_scrobble_raises_on_an_unusable_reply() -> None:
+    async def scenario(client: NavidromeClient, fake: FakeNavidrome) -> None:
+        with pytest.raises(aiohttp.ClientPayloadError, match="unusable reply"):
+            await client.scrobble("junk", 1, True)
+        assert await client.scrobble("bad", 1, True) is False
 
     with_client(scenario)
 
@@ -533,6 +545,83 @@ def test_passthrough_forwards_request_and_response(tmp_path: Path) -> None:
     with_bridge(tmp_path, scenario)
 
 
+def test_passthrough_get_has_no_body_and_is_not_chunked(tmp_path: Path) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.get("/api/thing")
+        assert resp.status == 201
+        seen = fake.requests[-1]
+        assert seen["body"] == b""
+        names = {name.lower() for name in seen["headers"]}
+        assert not names & {"transfer-encoding", "content-length"}
+
+    with_bridge(tmp_path, scenario)
+
+
+def test_passthrough_small_post_arrives_byte_identical(tmp_path: Path) -> None:
+    body = b'{"k": "v", "n": [1, 2, 3]}'
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.post("/api/thing", data=body, headers={"Content-Type": "text/x-test"})
+        assert resp.status == 201
+        seen = fake.requests[-1]
+        assert seen["body"] == body
+        assert seen["headers"]["Content-Length"] == str(len(body))
+        assert seen["headers"]["Content-Type"] == "text/x-test"
+        assert "Transfer-Encoding" not in seen["headers"]
+
+    with_bridge(tmp_path, scenario)
+
+
+def test_passthrough_streams_a_body_above_one_mebibyte(tmp_path: Path) -> None:
+    body = bytes(32 + i % 90 for i in range(3 * 1024 * 1024))
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.post("/api/thing", data=body)
+        assert resp.status == 201
+        seen = fake.requests[-1]
+        assert hashlib.sha256(seen["body"]).hexdigest() == hashlib.sha256(body).hexdigest()
+        assert seen["headers"]["Content-Length"] == str(len(body))
+
+    with_bridge(tmp_path, scenario)
+
+
+def test_passthrough_forwards_a_chunked_body(tmp_path: Path) -> None:
+    parts = [b"a" * 70000, b"b" * 70000, b"c" * 10]
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for part in parts:
+            yield part
+
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        resp = await client.post("/api/thing", data=chunks())
+        assert resp.status == 201
+        seen = fake.requests[-1]
+        assert seen["body"] == b"".join(parts)
+        assert seen["headers"]["Transfer-Encoding"] == "chunked"
+
+    with_bridge(tmp_path, scenario)
+
+
+def test_passthrough_post_with_upstream_down_is_502(tmp_path: Path) -> None:
+    async def go() -> None:
+        app = build_app(make_config("http://127.0.0.1:1", tmp_path), FakeWiim())
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post("/api/thing", data=b"x" * 2_000_000)
+            assert resp.status == 502
+
+    run(go())
+
+
+def test_jukebox_control_still_caps_the_form_at_one_mebibyte(tmp_path: Path) -> None:
+    async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
+        big = {"action": "status", "u": "dan", "p": "pw", "pad": "x" * (1024 * 1024 + 10)}
+        resp = await client.post("/rest/jukeboxControl", data=big)
+        assert resp.status == 413
+        assert fake.requests == []
+
+    with_bridge(tmp_path, scenario)
+
+
 def test_passthrough_keeps_compressed_bytes(tmp_path: Path) -> None:
     async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
         resp = await client.get("/gz")
@@ -741,7 +830,7 @@ def test_the_device_port_serves_only_audio_and_health(tmp_path: Path) -> None:
             resp = await http.head(f"{device}/healthz")
             assert resp.status == 200
             resp = await http.get(f"{device}/s/SECRET/norange/a.flac")
-            assert resp.status == 200
+            assert resp.status == 404
             resp = await http.get(f"{device}/s/WRONG/range/a.flac")
             assert resp.status == 404
             served = len(ports.fake.requests)
@@ -812,7 +901,6 @@ def server_args(tmp_path: Path, credentials: Path) -> list[str]:
     return [
         "--credentials", str(credentials),
         "--navidrome-url", "http://navidrome.invalid:4533",
-        "--log", str(tmp_path / "out" / "requests.jsonl"),
         "--info-file", str(tmp_path / "info.json"),
         "--secret", "S3cret-value",
         "--port", "9001",
@@ -1231,6 +1319,18 @@ def test_scrobbling_is_off_by_default(tmp_path: Path, monkeypatch: pytest.Monkey
     scrobble_bridge(tmp_path, scenario, monkeypatch)
 
 
+def assert_remote_security_headers(resp: aiohttp.ClientResponse) -> None:
+    csp = resp.headers["Content-Security-Policy"]
+    assert csp == (
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; "
+        "media-src blob:; connect-src 'self'; base-uri 'none'; form-action 'self'"
+    )
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["Referrer-Policy"] == "no-referrer"
+    assert "X-Frame-Options" not in resp.headers
+    assert "frame-ancestors" not in csp
+
+
 def test_remote_redirect_and_pages(tmp_path: Path) -> None:
     async def scenario(client: TestClient[Any, Any], fake: FakeNavidrome, wiim: FakeWiim) -> None:
         resp = await client.get("/remote", allow_redirects=False)
@@ -1242,15 +1342,22 @@ def test_remote_redirect_and_pages(tmp_path: Path) -> None:
         assert resp.content_type == "text/html"
         assert "<title>" in await resp.text()
         assert resp.headers["Cache-Control"] == "no-cache"
+        assert_remote_security_headers(resp)
 
         for name in REMOTE_FILES:
             resp = await client.get(f"/remote/{name}")
             assert resp.status == 200, name
             assert resp.headers["Cache-Control"] == "no-cache"
+            assert_remote_security_headers(resp)
 
         for bad in ("/remote/nope.js", "/remote/..%2Fapp.py"):
             resp = await client.get(bad)
             assert resp.status == 404, bad
+        resp = await client.get("/remote/nope.js")
+        assert resp.headers["Cache-Control"] == "no-cache"
+        assert_remote_security_headers(resp)
+        resp = await client.get("/remote", allow_redirects=False)
+        assert_remote_security_headers(resp)
         assert fake.requests == []
 
         resp = await client.get("/rest/ping.view?u=dan&p=pw")
@@ -1353,10 +1460,6 @@ def test_healthz_touches_nothing(tmp_path: Path) -> None:
         assert wiim.calls == wiim_before
 
     with_bridge(tmp_path, scenario)
-
-
-def test_request_log_accepts_dev_null() -> None:
-    RequestLog(Path("/dev/null")).write({"req": 1})
 
 
 @pytest.mark.parametrize(
@@ -1708,8 +1811,8 @@ def test_scrobble_setting_defaults_to_off() -> None:
 
 def test_other_defaults_and_env() -> None:
     s = settings_for()
-    assert (s.bind, s.queue_name, s.log, s.info_file) == (
-        "0.0.0.0", "bridge", Path("/dev/null"), None,
+    assert (s.bind, s.queue_name, s.info_file) == (
+        "0.0.0.0", "bridge", None,
     )  # fmt: skip
     assert s.credentials == "~/.config/navidrome-wiim-bridge/credentials.json"
     env = {
@@ -1719,10 +1822,19 @@ def test_other_defaults_and_env() -> None:
         "BRIDGE_CREDENTIALS": "/c.json",
     }
     s = settings_for(env=env)
-    assert (s.bind, s.queue_name, s.log, s.credentials) == (
-        "127.0.0.1", "q", Path("/tmp/x.jsonl"), "/c.json",
+    assert (s.bind, s.queue_name, s.credentials) == (
+        "127.0.0.1", "q", "/c.json",
     )  # fmt: skip
     assert settings_for("--credentials", "/o.json", env=env).credentials == "/o.json"
+
+
+def test_request_log_environment_variable_is_ignored() -> None:
+    s = settings_for(env={"BRIDGE_REQUEST_LOG": "/nonexistent/dir/x.jsonl"})
+    assert not hasattr(s, "log")
+
+
+def test_envelope_reports_the_package_version() -> None:
+    assert error_envelope(0, "x")["subsonic-response"]["serverVersion"] == bridge.__version__
 
 
 def test_device_host_derives_both_urls() -> None:
@@ -1919,7 +2031,6 @@ def test_main_defaults_write_no_files_and_log_to_dev_null(
         "--device-host", "192.0.2.50",
     ]  # fmt: skip
     assert bridge_server.main(argv) == 0
-    assert captured[0].log_path == Path("/dev/null")
     assert sorted(p.name for p in tmp_path.iterdir()) == ["creds.json"]
     assert bridge_server.main([*argv, "--no-info-file"]) == 0
     assert sorted(p.name for p in tmp_path.iterdir()) == ["creds.json"]

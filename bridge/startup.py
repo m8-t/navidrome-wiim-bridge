@@ -32,14 +32,13 @@ def check_navidrome(
     return AuthResult.REJECTED, f"Navidrome rejected the credentials{suffix}"
 
 
-def write_info_file(path: Path, base_url: str, navidrome_url: str, log_path: Path) -> None:
+def write_info_file(path: Path, base_url: str, navidrome_url: str) -> None:
     info = {
         "base_url": base_url,
         "url_template": f"{base_url}/<profile>/<song_id>.flac",
         "profiles": list(PROFILES),
         "navidrome_url": navidrome_url,
         "started_iso": utc_iso(time.time()),
-        "log": str(log_path),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")

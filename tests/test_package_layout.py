@@ -1,11 +1,10 @@
 import importlib
-import json
 from pathlib import Path
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-from test_poc_proxy import PAYLOAD, PAYLOAD_SHA256, FakeUpstream, drive, make_config, url
+from test_proxy import PAYLOAD, FakeUpstream, drive, make_config, url
 
 from bridge.proxy import add_proxy_routes
 
@@ -28,7 +27,7 @@ EXPECTED = {
     ],
     "bridge.startup": ["check_navidrome", "write_info_file"],
     "bridge.proxy": [
-        "PROFILES", "parse_range_start", "response_headers", "ProxyConfig", "RequestLog",
+        "PROFILES", "response_headers", "ProxyConfig",
         "handle_stream", "create_app", "add_proxy_routes",
     ],
 }  # fmt: skip
@@ -41,11 +40,11 @@ def test_package_modules_expose_their_names(module: str) -> None:
     assert missing == []
 
 
-def test_add_proxy_routes_serves_full_get(tmp_path: Path) -> None:
+def test_add_proxy_routes_serves_full_get() -> None:
     async def scenario() -> tuple[bytes, int, str]:
         upstream = FakeUpstream()
         async with TestServer(upstream.app) as fake:
-            config = make_config(str(fake.make_url("")).rstrip("/"), tmp_path / "log.jsonl")
+            config = make_config(str(fake.make_url("")).rstrip("/"))
             app = web.Application()
             add_proxy_routes(app, config)
             async with TestClient(TestServer(app)) as client:
@@ -56,11 +55,3 @@ def test_add_proxy_routes_serves_full_get(tmp_path: Path) -> None:
     assert status == 200
     assert body == PAYLOAD
     assert length == "200000"
-    ends = [json.loads(line) for line in (tmp_path / "log.jsonl").read_text().splitlines()]
-    assert [e["ev"] for e in ends] == ["start", "end"]
-    assert ends[1]["sha256"] == PAYLOAD_SHA256
-
-
-def test_the_production_entrypoint_does_not_depend_on_the_poc_proxy() -> None:
-    for relative in ("tools/bridge_server.py", "Dockerfile"):
-        assert "poc_proxy" not in (ROOT / relative).read_text(encoding="utf-8"), relative

@@ -8,6 +8,24 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.14.0] - 2026-11-10
+
+### Added
+
+- A finished play that cannot be reported to Navidrome is retried after 5 seconds, 30 seconds, 2 minutes and 10 minutes before it is given up. A play Navidrome refuses is not retried.
+- The remote page is served with a Content-Security-Policy that allows scripts and styles only from the bridge itself, plus `X-Content-Type-Options` and `Referrer-Policy` headers. Embedding the page in another site's frame keeps working.
+
+### Changed
+
+- Requests passed on to Navidrome are streamed and no longer limited to 1 MiB.
+- The bridge shows up in Navidrome's player list as `wiim-bridge` (was `wiim-bridge-poc`) and reports its real version in jukebox replies.
+- Error messages sent to clients have URL query strings removed, as the log already did.
+
+### Removed
+
+- The JSON log of the amplifier's audio requests and the checksum computed for it on every track: the `--log` option and `BRIDGE_REQUEST_LOG` are gone. A `BRIDGE_REQUEST_LOG` left in the environment is ignored.
+- The unused `norange` audio profile and the proof-of-concept tool `tools/poc_proxy.py`.
+
 ## [0.13.0] - 2026-11-10
 
 ### Changed

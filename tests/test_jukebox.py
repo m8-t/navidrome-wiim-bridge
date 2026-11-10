@@ -581,13 +581,30 @@ def test_failure_warning_redacts_query_strings(caplog: pytest.LogCaptureFixture)
             return await resp.json()  # type: ignore[no-any-return]
 
     body = run(scenario())
-    assert body["subsonic-response"]["error"] == {"code": 0, "message": text}
+    assert body["subsonic-response"]["error"] == {
+        "code": 0,
+        "message": "GET http://host/x?<redacted> failed",
+    }
     (record,) = [r for r in caplog.records if r.name == "bridge.jukebox"]
     assert record.levelno == logging.WARNING
     message = record.getMessage()
     assert "?<redacted>" in message
     for leaked in ("abc123", "salt", "u=dan"):
         assert leaked not in message
+
+
+def test_error_message_sent_to_the_client_is_redacted() -> None:
+    jb, player = make()
+    do(jb, "set", ["a"])
+    player.failing["load"] = PlayerError("lookup http://x/rest/getSong?u=a&t=b&s=c")
+
+    async def scenario() -> dict[str, Any]:
+        async with serve(jb) as client:
+            resp = await client.get("/rest/jukeboxControl?action=start&u=dan&p=pw")
+            return await resp.json()  # type: ignore[no-any-return]
+
+    message = run(scenario())["subsonic-response"]["error"]["message"]
+    assert message == "lookup http://x/rest/getSong?<redacted>"
 
 
 def test_clear_only_touches_device_when_loaded() -> None:

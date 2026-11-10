@@ -258,6 +258,33 @@ def test_unknown_duration_loop_needs_a_big_drop_to_the_start() -> None:
     assert events == [Scrobble("u", ms(T0 + 122), False)]
 
 
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+async def drain(scrobbler: Scrobbler, sent: list[Any], count: int) -> None:
+    task = asyncio.create_task(scrobbler.run())
+    while len(sent) < count:
+        await asyncio.sleep(0)
+    for _ in range(10):
+        await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+def warnings_of(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
 def test_scrobbler_delivers_in_order_and_survives_failures(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -270,27 +297,167 @@ def test_scrobbler_delivers_in_order_and_survives_failures(
             raise aiohttp.ClientError("GET http://h/rest/scrobble?u=dan&t=tok&s=salt failed")
         return song_id != "no"
 
+    clock = Clock()
+
     async def scenario() -> None:
-        scrobbler = Scrobbler(send)
-        task = asyncio.create_task(scrobbler.run())
+        scrobbler = Scrobbler(send, clock.sleep, clock)
         scrobbler.submit(
-            [Scrobble("a", 1, False), Scrobble("bad", 2, True), Scrobble("no", 3, True)]
+            [Scrobble("a", 1, False), Scrobble("bad", 2, False), Scrobble("no", 3, True)]
         )
         scrobbler.submit([Scrobble("c", 4, True)])
-        while len(sent) < 4:
-            await asyncio.sleep(0)
-        for _ in range(5):
-            await asyncio.sleep(0)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await drain(scrobbler, sent, 4)
 
     run(scenario())
-    assert sent == [("a", 1, False), ("bad", 2, True), ("no", 3, True), ("c", 4, True)]
-    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert sent == [("a", 1, False), ("bad", 2, False), ("no", 3, True), ("c", 4, True)]
+    warnings = warnings_of(caplog)
     assert len(warnings) == 2
     assert "?<redacted>" in warnings[0]
     assert "tok" not in warnings[0]
     assert "was not accepted" in warnings[1]
+    assert clock.slept == []
+
+
+def test_a_play_is_retried_until_navidrome_answers(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO)
+    sent: list[str] = []
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        if len(sent) <= 2:
+            raise aiohttp.ClientError("GET http://h/rest/scrobble?u=dan&t=tok&s=salt failed")
+        return True
+
+    clock = Clock()
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, clock.sleep, clock)
+        scrobbler.submit([Scrobble("a", 1, True)])
+        await drain(scrobbler, sent, 3)
+
+    run(scenario())
+    assert sent == ["a", "a", "a"]
+    assert clock.slept == [5.0, 30.0]
+    messages = [r.getMessage() for r in caplog.records if r.name == "bridge.scrobble"]
+    assert len(messages) == 2
+    assert messages[0].startswith("scrobble of play a failed, retrying: ")
+    assert "tok" not in messages[0]
+    assert messages[1] == "scrobbled play a"
+
+
+def test_a_play_is_dropped_after_the_last_retry(caplog: pytest.LogCaptureFixture) -> None:
+    sent: list[str] = []
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        raise TimeoutError
+
+    clock = Clock()
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, clock.sleep, clock)
+        scrobbler.submit([Scrobble("a", 1, True)])
+        await drain(scrobbler, sent, 5)
+
+    run(scenario())
+    assert len(sent) == 5
+    assert clock.slept == [5.0, 30.0, 120.0, 600.0]
+    warnings = warnings_of(caplog)
+    assert len(warnings) == 2
+    assert "retrying" in warnings[0]
+    assert warnings[1] == "scrobble of play a failed: TimeoutError"
+
+
+def test_a_refused_play_is_not_retried(caplog: pytest.LogCaptureFixture) -> None:
+    sent: list[str] = []
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        return False
+
+    clock = Clock()
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, clock.sleep, clock)
+        scrobbler.submit([Scrobble("a", 1, True)])
+        await drain(scrobbler, sent, 1)
+
+    run(scenario())
+    assert sent == ["a"]
+    assert clock.slept == []
+    assert warnings_of(caplog) == ["scrobble of play a was not accepted"]
+
+
+def test_events_queued_during_a_retry_wait_their_turn() -> None:
+    sent: list[str] = []
+    scrobbler_ref: list[Scrobbler] = []
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        if sent == ["a"]:
+            raise aiohttp.ClientError("down")
+        return True
+
+    clock = Clock()
+
+    async def sleep(seconds: float) -> None:
+        scrobbler_ref[0].submit([Scrobble("b", 2, True)])
+        await clock.sleep(seconds)
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, sleep, clock)
+        scrobbler_ref.append(scrobbler)
+        scrobbler.submit([Scrobble("a", 1, True)])
+        await drain(scrobbler, sent, 3)
+
+    run(scenario())
+    assert sent == ["a", "a", "b"]
+
+
+def test_stale_now_playing_is_dropped_and_a_fresh_one_is_sent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    sent: list[str] = []
+    clock = Clock()
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        return True
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, clock.sleep, clock)
+        scrobbler.submit([Scrobble("old", 1, False)])
+        clock.now += 61.0
+        scrobbler.submit([Scrobble("new", 2, False), Scrobble("p", 3, True)])
+        clock.now += 60.0
+        await drain(scrobbler, sent, 2)
+
+    run(scenario())
+    assert sent == ["new", "p"]
+    assert warnings_of(caplog) == []
+    assert any(r.levelno == logging.DEBUG and "old" in r.getMessage() for r in caplog.records)
+
+
+def test_now_playing_that_raises_is_not_retried(caplog: pytest.LogCaptureFixture) -> None:
+    sent: list[str] = []
+
+    async def send(song_id: str, time_ms: int, submission: bool) -> bool:
+        sent.append(song_id)
+        if song_id == "np":
+            raise aiohttp.ClientError("down")
+        return True
+
+    clock = Clock()
+
+    async def scenario() -> None:
+        scrobbler = Scrobbler(send, clock.sleep, clock)
+        scrobbler.submit([Scrobble("np", 1, False), Scrobble("p", 2, True)])
+        await drain(scrobbler, sent, 2)
+
+    run(scenario())
+    assert sent == ["np", "p"]
+    assert clock.slept == []
+    assert warnings_of(caplog) == ["scrobble of now playing np failed: down"]
 
 
 def test_scrobbler_drops_when_the_queue_is_full(caplog: pytest.LogCaptureFixture) -> None:

@@ -161,7 +161,6 @@ Further settings:
 | `BRIDGE_QUEUE_NAME` | `--queue-name` | `bridge` | name of the queue on the device |
 | `BRIDGE_SCROBBLE` | `--scrobble` | `false` | report plays to Navidrome as the bridge's user, see below |
 | `BRIDGE_CREDENTIALS` | `--credentials` | `~/.config/navidrome-wiim-bridge/credentials.json` | the credentials file |
-| `BRIDGE_REQUEST_LOG` | `--log` | `/dev/null` | file for a JSON log of the device's audio requests |
 | `BRIDGE_DEVICE_BASE` | `--device-base` | `http://<device host>:49152` | the WiiM's UPnP address, if it differs |
 | `BRIDGE_STATUS_URL` | `--status-url` | `https://<device host>/httpapi.asp?command=getPlayerStatus` | the WiiM's status address, if it differs |
 
@@ -237,7 +236,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.13.0
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.14.0
 ```
 
 ### Kubernetes

@@ -87,7 +87,7 @@ def build_didl(
         f"<upnp:album>{b}</upnp:album>"
         f"<upnp:artist>{a}</upnp:artist>"
         f"<dc:queueItemId>{i}</dc:queueItemId>"
-        "<dc:description>wiim-bridge-poc</dc:description>"
+        "<dc:description>wiim-bridge</dc:description>"
         f"{art}"
         "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
         f'<res duration="{d}" protocolInfo="http-get:*:{mime}:DLNA.ORG_OP=01;DLNA.ORG_CI=0;'

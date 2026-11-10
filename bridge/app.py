@@ -30,7 +30,6 @@ CHUNK_SIZE = 65536
 REQUEST_HOP_HEADERS = frozenset(
     {
         "host",
-        "content-length",
         "connection",
         "keep-alive",
         "transfer-encoding",
@@ -53,11 +52,9 @@ class BridgeConfig:
     secret: str = field(repr=False)
     advertise_host: str
     port: int
-    log_path: Path
     device_base: str
     status_url: str
     queue_name: str = "bridge"
-    profile: str = "range"
     max_volume: int = 100
     clear_on_start: bool = True
     scrobble: bool = False
@@ -66,10 +63,7 @@ class BridgeConfig:
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
     port = config.port if config.device_port is None else config.device_port
-    return (
-        f"http://{config.advertise_host}:{port}"
-        f"/s/{config.secret}/{config.profile}/{song_id}.flac"
-    )
+    return f"http://{config.advertise_host}:{port}/s/{config.secret}/range/{song_id}.flac"
 
 
 class NavidromeClient:
@@ -119,7 +113,9 @@ class NavidromeClient:
             "submission": "true" if submission else "false",
         }
         body = await self._get_json("/rest/scrobble", params)
-        return body is not None and body.get("status") == "ok"
+        if body is None or body.get("status") not in ("ok", "failed"):
+            raise aiohttp.ClientPayloadError("unusable reply")
+        return bool(body["status"] == "ok")
 
     async def check_caller(self, params: Mapping[str, str]) -> AuthResult:
         if "u" not in params and "apiKey" not in params:
@@ -184,13 +180,16 @@ async def passthrough(request: web.Request) -> web.StreamResponse:
         return web.Response(status=400, text="bad request target")
     base = request.app[CONFIG_KEY].navidrome_url
     url = URL(base + target, encoded=True)
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in REQUEST_DROPPED_HEADERS}
-    body = await request.read()
+    dropped = REQUEST_DROPPED_HEADERS
+    if not request.body_exists:
+        dropped |= {"content-length"}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in dropped}
+    body = request.content if request.body_exists else None
     session = request.app[PASSTHROUGH_SESSION_KEY]
     resp: web.StreamResponse | None = None
     try:
         async with session.request(
-            request.method, url, headers=headers, data=body or None, allow_redirects=False
+            request.method, url, headers=headers, data=body, allow_redirects=False
         ) as upstream:
             resp = web.StreamResponse(status=upstream.status, reason=upstream.reason)
             for name, value in upstream.headers.items():
@@ -240,7 +239,15 @@ def device_port_only(device_port: int) -> Middleware:
 
 REMOTE_DIR = Path(__file__).resolve().parent / "remote"
 REMOTE_FILES = ("index.html", "remote.css", "remote.js", "logic.js", "md5.js", "theme-boot.js")
-REMOTE_HEADERS = {"Cache-Control": "no-cache"}
+REMOTE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Content-Security-Policy": (
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; "
+        "media-src blob:; connect-src 'self'; base-uri 'none'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+}
 
 
 def add_remote_routes(app: web.Application) -> None:
@@ -305,7 +312,6 @@ def build_app(
             password=config.password,
             salt=config.salt,
             secret=config.secret,
-            log_path=config.log_path,
         ),
         describe=jukebox.describe,
     )

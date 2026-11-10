@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,8 @@ LOOP_WINDOW_S = 10.0
 UNKNOWN_DURATION_DROP_S = 60.0
 END_SLACK_S = 3.0
 QUEUE_LIMIT = 100
+RETRY_DELAYS_S = (5.0, 30.0, 120.0, 600.0)
+NOW_PLAYING_MAX_AGE_S = 60.0
 
 ScrobbleSender = Callable[[str, int, bool], Awaitable[bool]]
 
@@ -125,33 +128,63 @@ class PlayTracker:
 
 
 class Scrobbler:
-    """Deliver scrobbles one at a time, in order, without ever blocking the caller."""
+    """Deliver scrobbles one at a time, in order, without ever blocking the caller.
 
-    def __init__(self, send: ScrobbleSender) -> None:
+    A play whose send raises is retried with growing delays while later events wait their turn;
+    now-playing updates are never retried and are dropped when they went stale in the queue.
+    """
+
+    def __init__(
+        self,
+        send: ScrobbleSender,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._send = send
-        self._queue: asyncio.Queue[Scrobble] = asyncio.Queue(QUEUE_LIMIT)
+        self._sleep = sleep
+        self._clock = clock
+        self._queue: asyncio.Queue[tuple[Scrobble, float]] = asyncio.Queue(QUEUE_LIMIT)
 
     def submit(self, events: Sequence[Scrobble]) -> None:
         for event in events:
             try:
-                self._queue.put_nowait(event)
+                self._queue.put_nowait((event, self._clock()))
             except asyncio.QueueFull:
                 logger.warning("scrobble queue is full, dropping a scrobble")
 
     async def run(self) -> None:
         while True:
-            event = await self._queue.get()
-            kind = "play" if event.submission else "now playing"
+            event, queued_at = await self._queue.get()
+            if not event.submission and self._clock() - queued_at > NOW_PLAYING_MAX_AGE_S:
+                logger.debug("dropping stale now playing %s", event.song_id)
+                continue
+            await self._deliver(event)
+
+    async def _deliver(self, event: Scrobble) -> None:
+        kind = "play" if event.submission else "now playing"
+        delays = iter(RETRY_DELAYS_S if event.submission else ())
+        retrying = False
+        while True:
             try:
                 accepted = await self._send(event.song_id, event.time_ms, event.submission)
             except Exception as exc:  # noqa: BLE001
                 message = redact(str(exc) or type(exc).__name__)
-                logger.warning("scrobble of %s %s failed: %s", kind, event.song_id, message)
+                delay = next(delays, None)
+                if delay is None:
+                    logger.warning("scrobble of %s %s failed: %s", kind, event.song_id, message)
+                    return
+                if not retrying:
+                    retrying = True
+                    logger.warning(
+                        "scrobble of %s %s failed, retrying: %s", kind, event.song_id, message
+                    )
+                await self._sleep(delay)
                 continue
             if accepted:
                 logger.info("scrobbled %s %s", kind, event.song_id)
             else:
                 logger.warning("scrobble of %s %s was not accepted", kind, event.song_id)
+            return
 
 
 async def watch(

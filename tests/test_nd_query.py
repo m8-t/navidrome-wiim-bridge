@@ -233,7 +233,7 @@ def test_fetch_sends_auth_parameters_and_returns_unwrapped_reply() -> None:
         "t": hashlib.md5((PASSWORD + SALT).encode()).hexdigest(),
         "s": SALT,
         "v": "1.16.1",
-        "c": "wiim-bridge-poc",
+        "c": "wiim-bridge",
         "f": "json",
         "query": "dilated",
         "albumCount": "5",

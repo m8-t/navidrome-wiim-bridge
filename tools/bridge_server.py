@@ -37,7 +37,6 @@ DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 8098
 DEFAULT_MAX_VOLUME = 100
 DEFAULT_QUEUE_NAME = "bridge"
-DEFAULT_REQUEST_LOG = "/dev/null"
 TRUE_VALUES = frozenset({"true", "1", "yes"})
 FALSE_VALUES = frozenset({"false", "0", "no"})
 
@@ -55,7 +54,6 @@ class Settings:
     queue_name: str
     keep_queue_on_start: bool
     scrobble: bool
-    log: Path
     info_file: Path | None
     credentials: str
 
@@ -123,12 +121,6 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="report plays to Navidrome so its play history includes them (env BRIDGE_SCROBBLE: "
         "true/1/yes or false/0/no, default: false)",
-    )
-    parser.add_argument(
-        "--log",
-        type=Path,
-        help="JSON-lines log of the device's audio requests (env BRIDGE_REQUEST_LOG, "
-        f"default: {DEFAULT_REQUEST_LOG})",
     )
     parser.add_argument(
         "--info-file",
@@ -232,7 +224,6 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
     )
     keep_queue = _boolean(args.keep_queue_on_start, environ, "BRIDGE_KEEP_QUEUE_ON_START")
     scrobble = _boolean(args.scrobble, environ, "BRIDGE_SCROBBLE")
-    log = args.log or Path(environ.get("BRIDGE_REQUEST_LOG") or DEFAULT_REQUEST_LOG)
     return Settings(
         advertise_host=advertise_host,
         device_base=device_base,
@@ -247,7 +238,6 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
         queue_name=_string(args.queue_name, environ, "BRIDGE_QUEUE_NAME", DEFAULT_QUEUE_NAME),
         keep_queue_on_start=keep_queue,
         scrobble=scrobble,
-        log=log,
         info_file=args.info_file,
         credentials=_string(args.credentials, environ, "BRIDGE_CREDENTIALS", DEFAULT_CREDENTIALS),
     )
@@ -328,7 +318,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     if settings.info_file is not None:
         base_url = f"http://{settings.advertise_host}:{audio_port}/s/{secret}"
-        startup.write_info_file(settings.info_file, base_url, settings.navidrome_url, settings.log)
+        startup.write_info_file(settings.info_file, base_url, settings.navidrome_url)
     logger.info(
         "listening on %s:%d, advertised as http://%s:%d",
         settings.bind,
@@ -357,7 +347,6 @@ def main(argv: list[str] | None = None) -> int:
         secret=secret,
         advertise_host=settings.advertise_host,
         port=settings.port,
-        log_path=settings.log,
         device_base=settings.device_base,
         status_url=settings.status_url,
         queue_name=settings.queue_name,

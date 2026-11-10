@@ -11,6 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
+from bridge import __version__
 from bridge.log import clean, redact, song_label
 from bridge.player import LOOP_MODES, Player, PlayerError, QueueDesyncError, Track
 from bridge.scrobble import PlayTracker, Scrobbler
@@ -26,7 +27,7 @@ Authenticator = Callable[[Mapping[str, str]], Awaitable[AuthResult]]
 ENVELOPE_BASE = {
     "version": "1.16.1",
     "type": "wiim-bridge",
-    "serverVersion": "0.1",
+    "serverVersion": __version__,
     "openSubsonic": True,
 }
 WRONG_LOGIN = 40
@@ -803,7 +804,7 @@ def add_jukebox_routes(
                     exc.code,
                     redact(exc.message),
                 )
-            return reply(error_envelope(exc.code, exc.message))
+            return reply(error_envelope(exc.code, redact(exc.message)))
         suffix = "".join(
             f" {name}={value}"
             for name, value in (("toIndex", to_index), ("shuffle", shuffle), ("repeat", repeat))

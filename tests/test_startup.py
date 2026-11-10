@@ -6,7 +6,7 @@ from typing import Any
 
 import aiohttp
 import pytest
-from test_poc_proxy import drive
+from test_proxy import drive
 
 import bridge.subsonic as bs
 from bridge import startup
@@ -98,11 +98,11 @@ def test_check_navidrome_connection_errors_are_unreachable(
 
 def test_write_info_file(tmp_path: Path) -> None:
     path = tmp_path / "deep" / "info.json"
-    startup.write_info_file(path, "http://h:1/s/abc", "http://n:2", tmp_path / "log.jsonl")
+    startup.write_info_file(path, "http://h:1/s/abc", "http://n:2")
     info = json.loads(path.read_text(encoding="utf-8"))
     assert info["base_url"] == "http://h:1/s/abc"
     assert info["url_template"] == "http://h:1/s/abc/<profile>/<song_id>.flac"
-    assert info["profiles"] == ["range", "norange"]
+    assert info["profiles"] == ["range"]
     assert info["navidrome_url"] == "http://n:2"
-    assert info["log"] == str(tmp_path / "log.jsonl")
+    assert "log" not in info
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", info["started_iso"])

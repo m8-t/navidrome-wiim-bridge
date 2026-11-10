@@ -12,7 +12,7 @@ import aiohttp
 
 DEFAULT_CREDENTIALS = "~/.config/navidrome-wiim-bridge/credentials.json"
 SUBSONIC_VERSION = "1.16.1"
-SUBSONIC_CLIENT = "wiim-bridge-poc"
+SUBSONIC_CLIENT = "wiim-bridge"
 UPSTREAM_HEADERS = {"Accept-Encoding": "identity"}
 
 
