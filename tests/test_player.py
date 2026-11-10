@@ -685,3 +685,44 @@ def test_failed_set_repeat_keeps_the_previous_mode() -> None:
     fake.failing = set()
     run(player.load([tr("a")]))
     assert [args for name, args in fake.calls if name == "queue_set_loop_mode"][-1] == (4,)
+
+
+def test_refresh_without_a_position_reading_stays_in_control() -> None:
+    player, fake = loaded()
+    state_with(fake, current_uri=None, queue_index=1, curpos_ms=None)
+    status = run(player.refresh())
+    assert status.position_s is None
+    assert status.in_control
+    assert player.in_control
+
+
+def test_refresh_position_is_zero_when_not_in_control() -> None:
+    player, fake = loaded()
+    state_with(fake, current_uri="http://x/y", queue_index=None, curpos_ms=None)
+    assert run(player.refresh()).position_s == 0.0
+
+
+def test_refresh_propagates_a_failed_read_and_keeps_control() -> None:
+    player, fake = loaded()
+
+    async def timing_out() -> DeviceState:
+        raise TimeoutError
+
+    fake.state = timing_out  # type: ignore[method-assign]
+    with pytest.raises(TimeoutError):
+        run(player.refresh())
+    assert player.in_control
+    assert player.index == 0
+
+
+def test_dropping_control_logs_the_reason_once(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG)
+    player, fake = loaded()
+    state_with(fake, current_uri="http://x/y?u=bob&t=secret&id=7", queue_index=None)
+    run(player.refresh())
+    run(player.refresh())
+    (record,) = [r for r in caplog.records if r.name == "bridge.player"]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == (
+        "device left the bridge queue: uri=http://x/y?u=***&t=***&id=7 queue_index=None tracks=3"
+    )

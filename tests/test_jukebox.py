@@ -18,6 +18,7 @@ from bridge.jukebox import (
     LOOKUP_CONCURRENCY,
     MAX_IDS_PER_CALL,
     MAX_QUEUE,
+    PLAY_HOLD_S,
     SEEK_ATTEMPTS,
     SEEK_FRESH_TIMEOUT,
     SEEK_TOLERANCE,
@@ -1067,6 +1068,7 @@ def test_seek_hold_releases_on_index_change() -> None:
 def test_seek_hold_releases_on_pause() -> None:
     jb, player, wall = seeking_setup()
     wall[0] += 1.0
+    jb._play_hold_until = float("-inf")
     player.is_playing, player.pos, player.sampled_at = False, 51.0, wall[0]
     assert do(jb, "status")["jukeboxStatus"]["positionMs"] == 51000
     player.is_playing, player.sampled_at = True, wall[0]
@@ -1848,6 +1850,39 @@ def test_poll_syncs_only_when_loaded_and_stale() -> None:
     assert player.pre_refreshes == [(0, True)]
 
 
+def test_idle_poll_backs_off_while_paused() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.pre_refreshes = [(0, False)]
+    fake.now += 6.0
+    assert run(jb.poll(5.0, 30.0)) is False
+    fake.now += 20.0
+    assert run(jb.poll(5.0, 30.0)) is False
+    assert player.pre_refreshes == [(0, False)]
+    fake.now += 5.0
+    assert run(jb.poll(5.0, 30.0)) is True
+    assert player.pre_refreshes == []
+
+
+def test_idle_poll_keeps_the_short_interval_while_playing() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    fake.now += 6.0
+    player.pre_refreshes = [(0, True)]
+    assert run(jb.poll(5.0, 30.0)) is True
+
+
+def test_idle_poll_does_not_touch_the_device_when_not_loaded() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    fake.now += 100.0
+    assert run(jb.poll(5.0, 30.0)) is False
+    assert player.refreshes == 0
+
+
 def test_poll_picks_up_what_the_device_is_doing() -> None:
     jb, player, fake = make_timed()
     do(jb, "set", ["a", "b"])
@@ -2562,3 +2597,89 @@ def test_http_queue_cap_and_id_cap_errors() -> None:
             assert len(jb.songs) == MAX_QUEUE
 
     run(scenario())
+
+
+def test_fast_skipping_keeps_playing_through_a_transition_sample() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a", "b", "c"])
+    do(jb, "start")
+    do(jb, "skip", index=1)
+    player.calls.clear()
+    player.pre_refreshes = [(1, False)]
+    status = do(jb, "skip", index=2)["jukeboxStatus"]
+    assert names(player) == ["play_index"]
+    assert status["playing"] is True
+    assert status["currentIndex"] == 2
+
+
+def test_skip_while_stopped_still_pauses_after_play_index() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a", "b"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.calls.clear()
+    player.pre_refreshes = [(0, False)]
+    do(jb, "skip", index=1)
+    assert names(player) == ["play_index", "pause"]
+
+
+def test_play_hold_ends_after_play_hold_seconds() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    fake.now += PLAY_HOLD_S - 0.5
+    player.pre_refreshes = [(0, False)]
+    assert do(jb, "status")["jukeboxStatus"]["playing"] is True
+    fake.now += 0.5
+    player.pre_refreshes = [(0, False)]
+    assert do(jb, "status")["jukeboxStatus"]["playing"] is False
+
+
+def test_stop_clears_the_play_hold() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    do(jb, "stop")
+    player.pre_refreshes = [(0, False)]
+    assert do(jb, "status")["jukeboxStatus"]["playing"] is False
+
+
+def test_lost_control_clears_the_play_hold() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    player.override = PlayerStatus(None, False, 0.0, False, "PLAYING")
+    do(jb, "status")
+    assert jb._play_hold_until == float("-inf")
+
+
+def test_missing_position_keeps_the_previous_one_and_emits_nothing() -> None:
+    jb, player, sink, wall = make_scrobbling()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    sample(jb, player, wall, 1000.0, 20.0)
+    sink.take()
+    wall[0] = 1002.0
+    player.override = PlayerStatus(0, True, None, True, "PLAYING", sampled_at=1002.0)
+    status = do(jb, "status")["jukeboxStatus"]
+    assert status["position"] == 20
+    assert status["positionMs"] == 22000
+    assert sink.take() == []
+    player.override = None
+    sample(jb, player, wall, 1005.0, 25.0)
+    assert do(jb, "status")["jukeboxStatus"]["position"] == 25
+
+
+def test_a_failed_status_poll_leaves_the_queue_loaded() -> None:
+    jb, player, fake = make_timed()
+    do(jb, "set", ["a"])
+    do(jb, "start")
+    fake.now += 6.0
+
+    async def broken() -> PlayerStatus:
+        raise TimeoutError
+
+    player.refresh = broken  # type: ignore[method-assign]
+    with pytest.raises(TimeoutError):
+        run(jb.poll(5.0))
+    assert jb.loaded

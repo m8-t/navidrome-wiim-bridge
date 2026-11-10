@@ -5,8 +5,15 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
+from bridge.log import clean
 from bridge.soap import UpnpError
-from bridge.wiim import REQUEST_ERRORS, QueueTrack, Wiim, build_queue_context
+from bridge.wiim import (
+    REQUEST_ERRORS,
+    QueueTrack,
+    Wiim,
+    build_queue_context,
+    redact_uri,
+)
 
 logger = logging.getLogger("bridge.player")
 
@@ -39,7 +46,7 @@ class Track:
 class PlayerStatus:
     index: int | None
     playing: bool
-    position_s: float
+    position_s: float | None
     in_control: bool
     transport: str | None
     volume: int | None = None
@@ -284,12 +291,23 @@ class Player:
             assert s.queue_index is not None
             self._index = s.queue_index - 1
         elif self._in_control:
+            logger.warning(
+                "device left the bridge queue: uri=%s queue_index=%s tracks=%d",
+                clean(str(redact_uri(s.current_uri))),
+                s.queue_index,
+                len(self._tracks),
+            )
             self._in_control = False
             self._index = None
+        position_s: float | None = 0.0
+        if ours and s.curpos_ms is not None:
+            position_s = s.curpos_ms / 1000
+        elif ours:
+            position_s = None
         return PlayerStatus(
             index=self._index if ours else None,
             playing=ours and s.transport in PLAYING_STATES,
-            position_s=(s.curpos_ms or 0) / 1000 if ours else 0.0,
+            position_s=position_s,
             in_control=self._in_control,
             transport=s.transport,
             volume=s.volume,

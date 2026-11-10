@@ -382,7 +382,7 @@ class Wiim:
     async def _current_queue_index(self) -> int | None:
         try:
             return (await self.queue_index())["current_index"]
-        except (UpnpError, *REQUEST_ERRORS):
+        except UpnpError:
             return None
 
     async def set_volume(self, volume: int) -> str:

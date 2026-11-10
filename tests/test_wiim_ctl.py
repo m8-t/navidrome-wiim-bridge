@@ -636,6 +636,18 @@ def test_wiim_state_survives_queue_index_fault() -> None:
     assert state.api_status == "play"
 
 
+def test_wiim_state_raises_on_a_queue_index_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        async def timing_out(name: str = "CurrentQueue") -> dict[str, int | None]:
+            raise TimeoutError
+
+        monkeypatch.setattr(wiim, "queue_index", timing_out)
+        return await wiim.state()
+
+    with pytest.raises(TimeoutError):
+        _run_against_fake_device(scenario)
+
+
 def _album_file(tmp_path: Path) -> Path:
     path = tmp_path / "album.json"
     path.write_text(

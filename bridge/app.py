@@ -17,7 +17,7 @@ from yarl import URL
 from bridge.jukebox import Jukebox, add_jukebox_routes
 from bridge.player import Player
 from bridge.proxy import ProxyConfig, add_proxy_routes
-from bridge.scrobble import POLL_INTERVAL_S, Scrobbler, watch
+from bridge.scrobble import IDLE_POLL_INTERVAL_S, POLL_INTERVAL_S, Scrobbler, watch
 from bridge.subsonic import UPSTREAM_HEADERS, AuthResult, subsonic_params
 
 logger = logging.getLogger("bridge.app")
@@ -328,7 +328,12 @@ def build_app(
         async def scrobbling(app: web.Application) -> AsyncIterator[None]:
             tasks = [
                 asyncio.create_task(scrobbler.run()),
-                asyncio.create_task(watch(lambda: jukebox.poll(POLL_INTERVAL_S), POLL_INTERVAL_S)),
+                asyncio.create_task(
+                    watch(
+                        lambda: jukebox.poll(POLL_INTERVAL_S, IDLE_POLL_INTERVAL_S),
+                        POLL_INTERVAL_S,
+                    )
+                ),
             ]
             yield
             for task in tasks:

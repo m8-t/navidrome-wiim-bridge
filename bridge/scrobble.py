@@ -11,6 +11,7 @@ from bridge.log import redact
 logger = logging.getLogger("bridge.scrobble")
 
 POLL_INTERVAL_S = 5.0
+IDLE_POLL_INTERVAL_S = 30.0
 MAX_LISTEN_S = 240.0
 MAX_GAP_S = 15.0
 LOOP_WINDOW_S = 10.0

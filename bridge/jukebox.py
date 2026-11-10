@@ -49,6 +49,7 @@ SEEK_VERIFY_CHECKS = 4
 SEEK_TOLERANCE = 3
 SEEK_HOLD_S = 3.0
 SEEK_HOLD_TOLERANCE = 2.0
+PLAY_HOLD_S = 3.0
 CORS_ORIGIN = {"Access-Control-Allow-Origin": "*"}
 CORS_PREFLIGHT = {
     **CORS_ORIGIN,
@@ -140,6 +141,7 @@ class Jukebox:
         self._position_ms = 0
         self._position_at = 0.0
         self._seek_hold: tuple[int, float, float] | None = None
+        self._play_hold_until = float("-inf")
         self._boot_id = secrets.token_hex(4)
         self._queue_version = 0
         self._actions: dict[str, Callable[..., Awaitable[None]]] = {
@@ -347,9 +349,12 @@ class Jukebox:
         self._keys = self._new_keys(len(songs))
         self.shuffle = False
 
-    async def poll(self, max_age: float) -> bool:
-        """Sync with the device unless a request did so less than max_age seconds ago."""
+    async def poll(self, max_age: float, idle_max_age: float | None = None) -> bool:
+        """Sync with the device unless a request did so less than max_age seconds ago
+        (idle_max_age while nothing is playing)."""
         async with self.lock:
+            if not self.playing and idle_max_age is not None:
+                max_age = max(max_age, idle_max_age)
             if not self.loaded or self._clock() - self._synced_at < max_age:
                 return False
             await self._sync()
@@ -394,6 +399,7 @@ class Jukebox:
             self.loaded = False
             self.playing = False
             self._seek_hold = None
+            self._play_hold_until = float("-inf")
             self._set_position(0)
             self._feed_plays(None)
             return
@@ -401,10 +407,15 @@ class Jukebox:
         if status.index is not None:
             self.current = status.index
         self.playing = status.playing
-        self.position = int(status.position_s)
-        self._position_ms = round(status.position_s * 1000)
-        self._position_at = status.sampled_at
-        self._feed_plays(status.position_s)
+        if not self.playing and self._clock() < self._play_hold_until:
+            self.playing = True
+        if status.position_s is None:
+            self._feed_plays(self._position_now_ms() / 1000)
+        else:
+            self.position = int(status.position_s)
+            self._position_ms = round(status.position_s * 1000)
+            self._position_at = status.sampled_at
+            self._feed_plays(status.position_s)
         self._apply_seek_hold(previous)
 
     def _apply_seek_hold(self, previous_index: int) -> None:
@@ -441,9 +452,10 @@ class Jukebox:
         while True:
             status = await self._player.refresh()
             on_track = status.in_control and status.playing and status.index == index
-            if on_track and status.position_s < target:
+            reading = status.position_s
+            if on_track and reading is not None and reading < target:
                 break
-            if on_track:
+            if on_track and reading is not None:
                 saw_at_target = True
             if self._clock() >= fresh_deadline:
                 if saw_at_target and on_track:
@@ -459,7 +471,7 @@ class Jukebox:
             for _ in range(SEEK_VERIFY_CHECKS):
                 await self._sleep(SEEK_WAIT_STEP)
                 status = await self._player.refresh()
-                if status.position_s >= target:
+                if status.position_s is not None and status.position_s >= target:
                     logger.info("resumed at %ds after %d seek(s)", seconds, attempt)
                     return True
                 if self._clock() >= deadline:
@@ -491,6 +503,7 @@ class Jukebox:
         self._replace_queue(songs)
         self._songs_changed()
         self._seek_hold = None
+        self._play_hold_until = float("-inf")
         self.current = 0
         self.loaded = False
         self.playing = False
@@ -537,9 +550,11 @@ class Jukebox:
                 await self._seek_when_playing(self.current, self.position)
         self._position_at = self._wall()
         self.playing = True
+        self._play_hold_until = self._clock() + PLAY_HOLD_S
 
     async def _stop(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:
         self._seek_hold = None
+        self._play_hold_until = float("-inf")
         if self.loaded:
             await self._player.pause()
         self.playing = False
@@ -555,7 +570,9 @@ class Jukebox:
                 await self._player.play_index(target)
                 if seconds > 0:
                     await self._seek_when_playing(target, seconds)
-                if not self.playing:
+                if self.playing:
+                    self._play_hold_until = self._clock() + PLAY_HOLD_S
+                else:
                     await self._player.pause()
             else:
                 await self._player.seek(seconds)
@@ -572,6 +589,7 @@ class Jukebox:
             self.loaded = False
             self.playing = False
             self._seek_hold = None
+            self._play_hold_until = float("-inf")
             self._set_position(0)
         elif self.loaded:
             await self._player.remove(target)
@@ -589,6 +607,7 @@ class Jukebox:
         self._replace_queue([])
         self._songs_changed()
         self._seek_hold = None
+        self._play_hold_until = float("-inf")
         self.current = 0
         self.loaded = False
         self.playing = False
@@ -664,6 +683,7 @@ class Jukebox:
             self.loaded = False
             self.playing = False
             self._seek_hold = None
+            self._play_hold_until = float("-inf")
             raise
 
     async def _shuffle(self, ids: Sequence[str], index: Any, offset: Any, gain: Any) -> None:

@@ -8,6 +8,18 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.12.1] - 2026-11-10
+
+### Fixed
+
+- Skipping quickly through tracks no longer fails with "701 Transition not allowed". For 3 seconds after the bridge starts a track it keeps treating the amplifier as playing, so a reading taken in the middle of a track change cannot trigger a pause.
+- A device request that times out no longer makes the bridge give up the queue or report position 0:00. The last known state is kept until the next good reading.
+
+### Changed
+
+- While nothing is playing, the bridge reads the amplifier every 30 seconds for play reporting, not every 5.
+- When the amplifier really leaves the bridge queue, the log now says what it switched to.
+
 ## [0.12.0] - 2026-11-04
 
 ### Added
