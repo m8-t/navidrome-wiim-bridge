@@ -184,6 +184,7 @@ class DeviceState:
     queue_index: int | None = None
     volume: int | None = None
     muted: bool | None = None
+    mode: str | None = None
 
 
 def _position_jumped(prev: DeviceState, cur: DeviceState) -> bool:
@@ -222,6 +223,7 @@ class ApiStatus:
     curpos_ms: int | None = None
     volume: int | None = None
     muted: bool | None = None
+    mode: str | None = None
 
 
 def _parse_volume(raw: object) -> int | None:
@@ -403,21 +405,47 @@ class Wiim:
             RENDERING_CONTROL_PATH,
         )
 
-    async def _api_status(self) -> ApiStatus:
+    async def _api_status(self, strict: bool = False) -> ApiStatus:
         try:
             async with self._status_session.get(self._status_url, ssl=False) as resp:
                 resp.raise_for_status()
                 payload = json.loads(await resp.text())
-        except (*REQUEST_ERRORS, ValueError):
+        except ValueError as exc:
+            if strict:
+                raise aiohttp.ClientPayloadError("status reply is not JSON") from exc
             return ApiStatus()
-        if not isinstance(payload, dict):
+        except REQUEST_ERRORS:
+            if strict:
+                raise
+            return ApiStatus()
+        if not isinstance(payload, dict) or (strict and payload.get("status") is None):
+            if strict:
+                raise aiohttp.ClientPayloadError("status reply has no status field")
             return ApiStatus()
         status = payload.get("status")
+        mode = payload.get("mode")
         return ApiStatus(
             status=str(status) if status is not None else None,
             curpos_ms=_parse_curpos(payload.get("curpos")),
             volume=_parse_volume(payload.get("vol")),
             muted={"1": True, "0": False}.get(str(payload.get("mute"))),
+            mode=str(mode) if mode is not None else None,
+        )
+
+    async def playback_state(self) -> DeviceState:
+        queue_index = await self._current_queue_index()
+        api = await self._api_status(strict=True)
+        return DeviceState(
+            t=time.time(),
+            transport=None,
+            current_uri=None,
+            next_uri=None,
+            api_status=api.status,
+            curpos_ms=api.curpos_ms,
+            queue_index=queue_index,
+            volume=api.volume,
+            muted=api.muted,
+            mode=api.mode,
         )
 
     async def state(self) -> DeviceState:
@@ -441,6 +469,7 @@ class Wiim:
             queue_index=queue_index,
             volume=api.volume,
             muted=api.muted,
+            mode=api.mode,
         )
 
     async def position(self) -> dict[str, str | None]:

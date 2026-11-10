@@ -12,13 +12,12 @@ from bridge.wiim import (
     QueueTrack,
     Wiim,
     build_queue_context,
-    redact_uri,
 )
 
 logger = logging.getLogger("bridge.player")
 
-DEVICE_QUEUE_URIS = (None, "", "SONGLIST-NETWORK")
-PLAYING_STATES = ("PLAYING", "TRANSITIONING")
+DEVICE_QUEUE_MODE = "10"
+PLAYING_STATUSES = ("play", "load")
 APPEND_BATCH = 50
 LOOP_MODES = {"off": 4, "all": 0, "one": 1}
 TRANSITION_NOT_ALLOWED = 701
@@ -48,7 +47,7 @@ class PlayerStatus:
     playing: bool
     position_s: float | None
     in_control: bool
-    transport: str | None
+    status: str | None
     volume: int | None = None
     muted: bool | None = None
     sampled_at: float = 0.0
@@ -280,10 +279,10 @@ class Player:
         self._in_control = False
 
     async def refresh(self) -> PlayerStatus:
-        s = await self._wiim.state()
+        s = await self._wiim.playback_state()
         ours = (
             self._in_control
-            and s.current_uri in DEVICE_QUEUE_URIS
+            and s.mode == DEVICE_QUEUE_MODE
             and s.queue_index is not None
             and 1 <= s.queue_index <= len(self._tracks)
         )
@@ -292,24 +291,25 @@ class Player:
             self._index = s.queue_index - 1
         elif self._in_control:
             logger.warning(
-                "device left the bridge queue: uri=%s queue_index=%s tracks=%d",
-                clean(str(redact_uri(s.current_uri))),
-                s.queue_index,
+                "device left the bridge queue: mode=%s status=%s queue_index=%s tracks=%d",
+                clean(str(s.mode)),
+                clean(str(s.api_status)),
+                clean(str(s.queue_index)),
                 len(self._tracks),
             )
             self._in_control = False
             self._index = None
         position_s: float | None = 0.0
         if ours and s.curpos_ms is not None:
-            position_s = s.curpos_ms / 1000
+            position_s = max(s.curpos_ms, 0) / 1000
         elif ours:
             position_s = None
         return PlayerStatus(
             index=self._index if ours else None,
-            playing=ours and s.transport in PLAYING_STATES,
+            playing=ours and s.api_status in PLAYING_STATUSES,
             position_s=position_s,
             in_control=self._in_control,
-            transport=s.transport,
+            status=s.api_status,
             volume=s.volume,
             muted=s.muted,
             sampled_at=s.t,

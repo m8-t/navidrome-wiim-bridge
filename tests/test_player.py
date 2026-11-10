@@ -32,12 +32,13 @@ class FakeWiim:
         self.errors: dict[str, list[Exception]] = {}
         self.device_state = DeviceState(
             t=0.0,
-            transport="PLAYING",
+            transport=None,
             current_uri=None,
             next_uri=None,
             api_status="play",
             curpos_ms=0,
             queue_index=1,
+            mode="10",
         )
 
     async def _record(self, name: str, *args: Any) -> str:
@@ -100,8 +101,8 @@ class FakeWiim:
     async def seek(self, seconds: int) -> str:
         return await self._record("seek", seconds)
 
-    async def state(self) -> DeviceState:
-        self.calls.append(("state", ()))
+    async def playback_state(self) -> DeviceState:
+        self.calls.append(("playback_state", ()))
         return self.device_state
 
 
@@ -376,17 +377,17 @@ def state_with(fake: FakeWiim, **changes: Any) -> None:
 
 def test_refresh_follows_device() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri=None, queue_index=3, transport="PLAYING", curpos_ms=4200)
+    state_with(fake, queue_index=3, api_status="play", curpos_ms=4200)
     status = run(player.refresh())
     assert status == PlayerStatus(
-        index=2, playing=True, position_s=4.2, in_control=True, transport="PLAYING"
+        index=2, playing=True, position_s=4.2, in_control=True, status="play"
     )
     assert player.index == 2
 
 
 def test_refresh_paused() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri=None, queue_index=2, transport="PAUSED_PLAYBACK")
+    state_with(fake, queue_index=2, api_status="pause")
     status = run(player.refresh())
     assert not status.playing
     assert status.index == 1
@@ -395,16 +396,16 @@ def test_refresh_paused() -> None:
 
 def test_refresh_stopped_queue_is_still_ours() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri="SONGLIST-NETWORK", queue_index=2, transport="STOPPED")
+    state_with(fake, queue_index=2, api_status="stop")
     status = run(player.refresh())
     assert status.in_control
     assert status.index == 1
     assert not status.playing
 
 
-def test_refresh_no_uri_and_no_queue_index_is_not_ours() -> None:
+def test_refresh_mode_10_without_queue_index_is_not_ours() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri=None, queue_index=None, transport="STOPPED")
+    state_with(fake, queue_index=None, api_status="stop")
     status = run(player.refresh())
     assert not status.in_control
     assert player.index is None
@@ -412,13 +413,13 @@ def test_refresh_no_uri_and_no_queue_index_is_not_ours() -> None:
 
 def test_refresh_other_source_drops_control() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri="http://x/y", queue_index=None)
+    state_with(fake, mode="40", queue_index=None)
     status = run(player.refresh())
     assert not status.in_control
     assert not status.playing
     assert player.index is None
     assert not player.in_control
-    assert names(fake) == ["state"]
+    assert names(fake) == ["playback_state"]
 
 
 def test_refresh_queue_index_beyond_local_queue() -> None:
@@ -698,7 +699,7 @@ def test_refresh_without_a_position_reading_stays_in_control() -> None:
 
 def test_refresh_position_is_zero_when_not_in_control() -> None:
     player, fake = loaded()
-    state_with(fake, current_uri="http://x/y", queue_index=None, curpos_ms=None)
+    state_with(fake, mode="40", queue_index=None, curpos_ms=None)
     assert run(player.refresh()).position_s == 0.0
 
 
@@ -708,7 +709,7 @@ def test_refresh_propagates_a_failed_read_and_keeps_control() -> None:
     async def timing_out() -> DeviceState:
         raise TimeoutError
 
-    fake.state = timing_out  # type: ignore[method-assign]
+    fake.playback_state = timing_out  # type: ignore[method-assign]
     with pytest.raises(TimeoutError):
         run(player.refresh())
     assert player.in_control
@@ -718,11 +719,27 @@ def test_refresh_propagates_a_failed_read_and_keeps_control() -> None:
 def test_dropping_control_logs_the_reason_once(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
     player, fake = loaded()
-    state_with(fake, current_uri="http://x/y?u=bob&t=secret&id=7", queue_index=None)
+    state_with(fake, mode="40", api_status="play", queue_index=3)
     run(player.refresh())
     run(player.refresh())
     (record,) = [r for r in caplog.records if r.name == "bridge.player"]
     assert record.levelno == logging.WARNING
     assert record.getMessage() == (
-        "device left the bridge queue: uri=http://x/y?u=***&t=***&id=7 queue_index=None tracks=3"
+        "device left the bridge queue: mode=40 status=play queue_index=3 tracks=3"
     )
+
+
+@pytest.mark.parametrize(("api_status", "playing"), [("load", True), ("pause", False), ("stop", False)])
+def test_refresh_playing_follows_the_api_status(api_status: str, playing: bool) -> None:
+    player, fake = loaded()
+    state_with(fake, api_status=api_status)
+    status = run(player.refresh())
+    assert status.playing is playing
+    assert status.status == api_status
+    assert status.in_control
+
+
+def test_refresh_clamps_a_negative_position() -> None:
+    player, fake = loaded()
+    state_with(fake, curpos_ms=-600)
+    assert run(player.refresh()).position_s == 0.0

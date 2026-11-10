@@ -8,6 +8,18 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.13.0] - 2026-11-10
+
+### Changed
+
+- The bridge reads the amplifier's state with two requests, down from four: the queue position and the status API. The status API also says which source is active and whether a track is loading, so the two UPnP transport and media requests are no longer needed.
+- A track change now counts as playing because the amplifier reports it as loading. The transport state used before flickered to "stopped" in that phase.
+- The log line for an amplifier that left the bridge queue names the source mode and status.
+
+### Fixed
+
+- A position slightly below zero, which the amplifier reports right after a skip, is shown as 0:00.
+
 ## [0.12.1] - 2026-11-10
 
 ### Fixed

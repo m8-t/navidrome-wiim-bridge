@@ -28,6 +28,7 @@ from bridge.wiim import (
     PLAYQUEUE_CONTROL_PATH,
     PLAYQUEUE_SERVICE,
     RENDERING_CONTROL_PATH,
+    ApiStatus,
     DeviceState,
     QueueTrack,
     Wiim,
@@ -634,6 +635,97 @@ def test_wiim_state_survives_queue_index_fault() -> None:
     assert state.queue_index is None
     assert state.transport == "STOPPED"
     assert state.api_status == "play"
+
+
+def test_wiim_state_makes_four_requests() -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.state()
+
+    queue_calls: list[tuple[str, str]] = []
+    state, calls, _ = _run_against_fake_device(scenario, queue_calls=queue_calls)
+    assert [h.strip('"').split("#")[1] for h, _ in calls] == ["GetTransportInfo", "GetMediaInfo"]
+    assert len(queue_calls) == 1
+    assert state.mode == "2"
+
+
+def test_wiim_playback_state_makes_two_requests_in_order() -> None:
+    order: list[str] = []
+
+    async def scenario(wiim: Wiim) -> DeviceState:
+        queue_index, api_status = wiim.queue_index, wiim._api_status
+
+        async def recording_queue_index(name: str = "CurrentQueue") -> dict[str, int | None]:
+            order.append("GetQueueIndex")
+            return await queue_index(name)
+
+        async def recording_api_status(strict: bool = False) -> ApiStatus:
+            order.append("status")
+            return await api_status(strict)
+
+        wiim.queue_index = recording_queue_index  # type: ignore[method-assign]
+        wiim._api_status = recording_api_status  # type: ignore[method-assign]
+        return await wiim.playback_state()
+
+    queue_calls: list[tuple[str, str]] = []
+    state, calls, _ = _run_against_fake_device(scenario, queue_calls=queue_calls)
+    assert order == ["GetQueueIndex", "status"]
+    assert calls == []
+    assert [h.strip('"').split("#")[1] for h, _ in queue_calls] == ["GetQueueIndex"]
+    assert (state.transport, state.current_uri, state.next_uri) == (None, None, None)
+    assert state.queue_index == 2
+    assert state.api_status == "play"
+    assert state.curpos_ms == 29564
+    assert state.mode == "2"
+
+
+def test_wiim_playback_state_survives_queue_index_fault() -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.playback_state()
+
+    state, _, _ = _run_against_fake_device(scenario, queue_index_fails=True)
+    assert state.queue_index is None
+    assert state.api_status == "play"
+
+
+@pytest.mark.parametrize("body", ["<html>nope</html>", "[1, 2]", '{"mode":"10","vol":"5"}'])
+def test_wiim_playback_state_rejects_a_bad_status_reply(body: str) -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.playback_state()
+
+    with pytest.raises(aiohttp.ClientPayloadError):
+        _run_against_fake_device(scenario, status_text=body)
+
+
+def test_wiim_playback_state_raises_on_a_status_timeout() -> None:
+    class TimingOut:
+        def get(self, *args: object, **kwargs: object) -> None:
+            raise TimeoutError
+
+    async def scenario(wiim: Wiim) -> DeviceState:
+        wiim._status_session = TimingOut()  # type: ignore[assignment]
+        return await wiim.playback_state()
+
+    with pytest.raises(TimeoutError):
+        _run_against_fake_device(scenario)
+
+
+def test_wiim_state_stays_lenient_about_a_bad_status_reply() -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.state()
+
+    state, _, _ = _run_against_fake_device(scenario, status_text="<html>nope</html>")
+    assert state.api_status is None
+    assert state.mode is None
+
+
+def test_wiim_playback_state_parses_mode() -> None:
+    async def scenario(wiim: Wiim) -> DeviceState:
+        return await wiim.playback_state()
+
+    state, _, _ = _run_against_fake_device(
+        scenario, status_text=PLAYER_STATUS.replace('"mode":"2"', '"mode":"10"')
+    )
+    assert state.mode == "10"
 
 
 def test_wiim_state_raises_on_a_queue_index_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,7 @@ import logging
 import random
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 import aiohttp
@@ -2000,6 +2001,26 @@ def test_a_701_on_skip_is_retried_once_by_the_player() -> None:
     assert err.value.code == 0
     assert names_of(wiim).count("queue_play") == 4
     assert fake.slept == 2 * RETRY_701_S
+
+
+def test_a_load_sample_between_skips_keeps_playing_without_the_play_hold() -> None:
+    fake = FakeTime()
+    wiim = FakeWiim()
+    jb = Jukebox(
+        Player(wiim, url_for, sleep=fake.sleep),  # type: ignore[arg-type]
+        numbered,
+        sleep=fake.sleep,
+        clock=fake.clock,
+    )
+    do(jb, "set", numbers(4))
+    do(jb, "start")
+    for target in (1, 2):
+        do(jb, "skip", index=target)
+        jb._play_hold_until = float("-inf")
+        wiim.device_state = replace(wiim.device_state, api_status="load", queue_index=target + 1)
+        status = do(jb, "status")["jukeboxStatus"]
+        assert status["playing"] is True
+        assert status["currentIndex"] == target
 
 
 def test_the_sync_reuse_window_is_one_second() -> None:
