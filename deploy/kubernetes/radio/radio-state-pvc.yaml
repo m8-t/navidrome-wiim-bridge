@@ -1,0 +1,12 @@
+# Keeps the radio mix settings across bridge restarts.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wiim-bridge-radio-state
+  labels:
+    app.kubernetes.io/name: wiim-bridge
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 64Mi

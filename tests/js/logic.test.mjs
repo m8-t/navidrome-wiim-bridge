@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { md5 } from "../../bridge/remote/md5.js";
 import {
   makeAuth, apiParams, formatTime, previousTarget, nextTarget, chunk, playCalls,
@@ -10,6 +11,7 @@ import {
   insertCalls, playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep,
   sortAlbumsByYear, countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
   bucketGenres, bucketFetchGenres,
+  radioNowPlayingText, radioGenreHint, toggleRadioBucket, radioSettingsBody,
   THEMES, THEME_KEY, isTheme, loadTheme, saveTheme, parseThemeMessage,
 } from "../../bridge/remote/logic.js";
 
@@ -933,4 +935,76 @@ test("mergeRandom spreads the result across lists instead of favouring the large
   const merged = mergeRandom([big, small], 20, seeded(5));
   assert.equal(merged.length, 20);
   assert.equal(merged.filter((s) => s.id.startsWith("s")).length, 10);
+});
+
+const mixCases = JSON.parse(
+  readFileSync(new URL("../fixtures/mix_cases.json", import.meta.url), "utf8"),
+);
+
+const cycleRng = (seq) => {
+  let i = 0;
+  return () => seq[i++ % seq.length];
+};
+
+test("mix fixture: isInterlude and isInstrumental", () => {
+  for (const c of mixCases.songs) {
+    const label = JSON.stringify(c.song);
+    assert.equal(isInterlude(c.song), c.interlude, `interlude ${label}`);
+    assert.equal(isInstrumental(c.song), c.instrumental, `instrumental ${label}`);
+  }
+});
+
+test("mix fixture: bucketGenres", () => {
+  for (const c of mixCases.genres) assert.deepEqual(bucketGenres(c.raw), c.buckets, c.name);
+});
+
+test("mix fixture: mergeRandom", () => {
+  for (const c of mixCases.merge) {
+    const out = mergeRandom(c.lists, c.count, cycleRng(c.rng));
+    assert.deepEqual(out.map((s) => s.id), c.expected, c.name);
+  }
+});
+
+test("mix fixture: collectMix", async () => {
+  for (const c of mixCases.collect) {
+    let round = 0;
+    const result = await collectMix(
+      async () => c.rounds[Math.min(round++, c.rounds.length - 1)],
+      c.count,
+      { skipInterludes: c.skipInterludes, skipInstrumentals: c.skipInstrumentals },
+      cycleRng(c.rng),
+    );
+    assert.deepEqual(result.songs.map((s) => s.id), c.expected, c.name);
+    assert.equal(result.short, c.short, c.name);
+  }
+});
+
+test("radioNowPlayingText", () => {
+  assert.equal(radioNowPlayingText(null), "Nothing played yet");
+  assert.equal(radioNowPlayingText({ title: "", artist: "A" }), "Nothing played yet");
+  assert.equal(radioNowPlayingText({ title: "T", artist: "A" }), "A - T");
+  assert.equal(radioNowPlayingText({ title: " T ", artist: "" }), "T");
+});
+
+test("radioGenreHint", () => {
+  assert.equal(radioGenreHint([]), "Whole library");
+  assert.equal(radioGenreHint(undefined), "Whole library");
+  assert.equal(radioGenreHint(["Rock", "Pop"]), "2 selected");
+});
+
+test("toggleRadioBucket", () => {
+  assert.deepEqual(toggleRadioBucket([], "Rock"), ["Rock"]);
+  assert.deepEqual(toggleRadioBucket(["Rock", "Pop"], "Rock"), ["Pop"]);
+  assert.deepEqual(toggleRadioBucket(undefined, "Pop"), ["Pop"]);
+  const before = ["Rock"];
+  toggleRadioBucket(before, "Pop");
+  assert.deepEqual(before, ["Rock"]);
+});
+
+test("radioSettingsBody", () => {
+  assert.deepEqual(
+    radioSettingsBody({ buckets: ["Rock", 5], skipInterludes: true, skipInstrumentals: "yes" }),
+    { buckets: ["Rock"], skipInterludes: true, skipInstrumentals: false },
+  );
+  assert.deepEqual(radioSettingsBody({}), { buckets: [], skipInterludes: false, skipInstrumentals: false });
 });

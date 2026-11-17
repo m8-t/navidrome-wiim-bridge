@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiim-radio-liquidsoap
+  labels:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+data:
+  radio.liq: |
+    # Pulls tracks one by one from the bridge and streams them to Icecast as MP3.
+    # Written for Liquidsoap 2.4.x.
+
+    bridge = environment.get(default="http://wiim-bridge:8098", "RADIO_BRIDGE_URL")
+    token = environment.get("BRIDGE_RADIO_TOKEN")
+
+    # null means "nothing now, ask again after retry_delay".
+    def next_track() =
+      try
+        response =
+          http.get(
+            headers=[("Authorization", "Bearer #{token}")],
+            timeout=15.,
+            "#{bridge}/radio/next"
+          )
+        if
+          response.status_code == 200
+        then
+          request.create(string.trim(response))
+        else
+          log.important(
+            label="radio",
+            "the bridge answered #{response.status_code}"
+          )
+          null
+        end
+      catch err do
+        log.important(label="radio", "cannot reach the bridge: #{err}")
+        null
+      end
+    end
+
+    # The whole file is downloaded before it plays, so allow time for large files.
+    radio = request.dynamic(retry_delay=3., timeout=90., next_track)
+
+    # Silence instead of a dead stream while the bridge has nothing to play.
+    radio = mksafe(radio)
+
+    output.icecast(
+      %mp3(bitrate=320),
+      host=environment.get(default="wiim-radio-icecast", "ICECAST_HOST"),
+      port=8000,
+      password=environment.get("ICECAST_SOURCE_PASSWORD"),
+      mount="/radio.mp3",
+      name=environment.get(default="Radio", "STREAM_NAME"),
+      description=environment.get(default="Shuffled mix", "STREAM_DESCRIPTION"),
+      genre=environment.get(default="Various", "STREAM_GENRE"),
+      radio
+    )

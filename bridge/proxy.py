@@ -157,11 +157,11 @@ async def relay(
 
 
 async def serve(
-    request: web.Request, info: RequestInfo, outcome: Outcome
+    request: web.Request, info: RequestInfo, outcome: Outcome, audio_format: str = "raw"
 ) -> web.StreamResponse | web.Response:
     config = request.app[CONFIG_KEY]
     params = subsonic_params(config.user, config.password, config.salt)
-    params.update(id=info.song_id, format="raw")
+    params.update(id=info.song_id, format=audio_format)
     headers = dict(UPSTREAM_HEADERS)
     headers |= {n: request.headers[n] for n in FORWARDED_REQUEST_HEADERS if n in request.headers}
     try:

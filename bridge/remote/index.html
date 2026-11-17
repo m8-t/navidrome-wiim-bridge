@@ -150,6 +150,23 @@
       </span>
       <input id="lock-switch" type="checkbox" role="switch" class="switch">
     </label>
+    <div id="radio-section" class="group" role="group" aria-labelledby="radio-label" hidden>
+      <span class="group-label"><span id="radio-label">Radio</span> <span id="radio-genre-hint" class="sub">Whole library</span></span>
+      <div id="radio-genres" class="chips"></div>
+      <label class="switch-row">
+        <span class="switch-text"><span class="switch-label">Skip intros, skits, interludes, acapellas and tracks under 1 minute</span></span>
+        <input id="radio-skip" type="checkbox" role="switch" class="switch">
+      </label>
+      <label class="switch-row">
+        <span class="switch-text"><span class="switch-label">Skip instrumentals</span></span>
+        <input id="radio-skip-instrumental" type="checkbox" role="switch" class="switch">
+      </label>
+      <p id="radio-now" class="sub">Nothing played yet</p>
+      <div id="radio-url-row" class="pl-new" hidden>
+        <input id="radio-url" type="text" readonly aria-label="Radio stream URL">
+        <button id="radio-copy" type="button" class="btn raised">Copy</button>
+      </div>
+    </div>
     <button id="signout" type="button" class="btn raised block danger">Sign out</button>
   </div>
 </div>

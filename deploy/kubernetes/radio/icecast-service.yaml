@@ -1,0 +1,16 @@
+# ClusterIP: reachable inside the cluster only. To let a game on the LAN listen,
+# change the type to LoadBalancer or NodePort, see ../README.md ("Radio").
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiim-radio-icecast
+  labels:
+    app.kubernetes.io/name: wiim-radio-icecast
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: wiim-radio-icecast
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiim-radio-liquidsoap
+  labels:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wiim-radio-liquidsoap
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wiim-radio-liquidsoap
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: liquidsoap
+          # Multi-arch (linux/amd64 and linux/arm64). The full image, not -minimal:
+          # the bridge hands out the original files, which need the ffmpeg decoders.
+          image: savonet/liquidsoap:v2.4.6
+          args: [/etc/liquidsoap/radio.liq]
+          env:
+            # The bridge's ClusterIP Service.
+            - name: RADIO_BRIDGE_URL
+              value: http://wiim-bridge:8098
+            - name: ICECAST_HOST
+              value: wiim-radio-icecast
+            - name: STREAM_NAME
+              value: Radio
+            - name: STREAM_DESCRIPTION
+              value: Shuffled mix from Navidrome
+            - name: STREAM_GENRE
+              value: Various
+            - name: BRIDGE_RADIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: BRIDGE_RADIO_TOKEN
+            - name: ICECAST_SOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: ICECAST_SOURCE_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: script
+              mountPath: /etc/liquidsoap
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: wiim-radio-liquidsoap

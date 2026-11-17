@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +17,7 @@ from yarl import URL
 from bridge.jukebox import Jukebox, add_jukebox_routes
 from bridge.player import Player
 from bridge.proxy import ProxyConfig, add_proxy_routes
+from bridge.radio import Radio, RadioConfig, add_radio_routes
 from bridge.scrobble import IDLE_POLL_INTERVAL_S, POLL_INTERVAL_S, Scrobbler, watch
 from bridge.subsonic import UPSTREAM_HEADERS, AuthResult, subsonic_params
 
@@ -59,6 +60,11 @@ class BridgeConfig:
     clear_on_start: bool = True
     scrobble: bool = False
     device_port: int | None = None
+    radio: bool = False
+    radio_token: str = field(default="", repr=False)
+    radio_state_path: Path | None = None
+    radio_stream_url: str | None = None
+    radio_format: str = "raw"
 
 
 def stream_url(config: BridgeConfig, song_id: str) -> str:
@@ -104,6 +110,26 @@ class NavidromeClient:
             return None
         song = body.get("song")
         return song if isinstance(song, dict) else None
+
+    async def _ok_body(self, path: str, params: Mapping[str, str]) -> dict[str, Any]:
+        body = await self._get_json(path, params)
+        if body is None or body.get("status") != "ok":
+            raise aiohttp.ClientPayloadError("unusable reply")
+        return body
+
+    async def get_random_songs(self, size: int, genre: str | None = None) -> list[dict[str, Any]]:
+        params = subsonic_params(self._user, self._password, self._salt)
+        params["size"] = str(size)
+        if genre:
+            params["genre"] = genre
+        body = await self._ok_body("/rest/getRandomSongs", params)
+        songs = (body.get("randomSongs") or {}).get("song") or []
+        return [s for s in songs if isinstance(s, dict) and "id" in s]
+
+    async def get_genres(self) -> list[Any]:
+        params = subsonic_params(self._user, self._password, self._salt)
+        body = await self._ok_body("/rest/getGenres", params)
+        return list((body.get("genres") or {}).get("genre") or [])
 
     async def scrobble(self, song_id: str, time_ms: int, submission: bool) -> bool:
         params = subsonic_params(self._user, self._password, self._salt)
@@ -250,7 +276,7 @@ REMOTE_HEADERS = {
 }
 
 
-def add_remote_routes(app: web.Application) -> None:
+def add_remote_routes(app: web.Application, radio_enabled: bool = False) -> None:
     async def redirect(request: web.Request) -> web.StreamResponse:
         raise web.HTTPFound("/remote/", headers=REMOTE_HEADERS)
 
@@ -263,9 +289,40 @@ def add_remote_routes(app: web.Application) -> None:
             return web.Response(status=404, text="not found", headers=REMOTE_HEADERS)
         return web.FileResponse(REMOTE_DIR / name, headers=REMOTE_HEADERS)
 
+    async def features(request: web.Request) -> web.StreamResponse:
+        return web.json_response({"radio": radio_enabled}, headers=REMOTE_HEADERS)
+
+    app.router.add_get("/remote/config.json", features)
     app.router.add_get("/remote", redirect)
     app.router.add_get("/remote/", index)
     app.router.add_get("/remote/{name:.+}", asset)
+
+
+def add_radio(
+    app: web.Application,
+    config: BridgeConfig,
+    authenticate: Callable[[Mapping[str, str]], Awaitable[AuthResult]],
+) -> None:
+    async def random_songs(size: int, genre: str | None) -> list[dict[str, Any]]:
+        return await app[NAVIDROME_KEY].get_random_songs(size, genre)
+
+    async def genres() -> list[Any]:
+        return await app[NAVIDROME_KEY].get_genres()
+
+    radio = Radio(random_songs, genres, config.radio_state_path)
+    add_radio_routes(
+        app,
+        RadioConfig(config.radio_token, config.radio_format, config.radio_stream_url),
+        radio,
+        authenticate,
+    )
+
+    async def radio_lifecycle(app: web.Application) -> AsyncIterator[None]:
+        radio.start()
+        yield
+        await radio.close()
+
+    app.cleanup_ctx.append(radio_lifecycle)
 
 
 def build_app(
@@ -347,7 +404,9 @@ def build_app(
             await asyncio.gather(*tasks, return_exceptions=True)
 
         app.cleanup_ctx.append(scrobbling)
-    add_remote_routes(app)
+    add_remote_routes(app, config.radio)
+    if config.radio:
+        add_radio(app, config, authenticate)
 
     async def healthz(request: web.Request) -> web.StreamResponse:
         return web.Response(text="ok")

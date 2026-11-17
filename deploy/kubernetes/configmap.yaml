@@ -20,3 +20,13 @@ data:
   # BRIDGE_MAX_VOLUME: "70"
   # Report plays to Navidrome; switch scrobbling off in Feishin then.
   # BRIDGE_SCROBBLE: "true"
+  # Radio, see the Radio section of the README. Switched on by the optional
+  # radio component (radio/), not here. Without it all of these stay unused.
+  # BRIDGE_RADIO: "true"
+  # The token belongs in the Secret (BRIDGE_RADIO_TOKEN), not here.
+  # Keeps the mix settings; needs a writable volume.
+  # BRIDGE_RADIO_STATE_PATH: "/var/lib/radio/settings.json"
+  # Public listen URL shown on the remote page.
+  # BRIDGE_RADIO_STREAM_URL: "http://radio.example.org:8000/radio.mp3"
+  # Navidrome stream format for radio tracks (default raw).
+  # BRIDGE_RADIO_FORMAT: "raw"

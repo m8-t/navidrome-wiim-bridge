@@ -1,0 +1,2226 @@
+{
+ "songs": [
+  {
+   "song": {
+    "title": "Plain song",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": 45
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": 120
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro"
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": 89.9
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": 90
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Short one",
+    "duration": 59
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Short one",
+    "duration": 60
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Short one",
+    "duration": 59.5
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Skit 3",
+    "duration": 30
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "The Skit",
+    "duration": 80
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Interlude",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Prelude",
+    "duration": 10
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Zwischenspiel",
+    "duration": 85
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Outros",
+    "duration": 70
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Commercials",
+    "duration": 60
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Introduction",
+    "duration": 100
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Outroduction",
+    "duration": 100
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "introspection",
+    "duration": 100
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Interviews",
+    "duration": 40
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Song (A Cappella)",
+    "duration": 200
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Acapella",
+    "duration": 200
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "A-capella version",
+    "duration": 200
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "acappellas",
+    "duration": 300
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Cap Pella",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Song (Instrumental)",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": true
+  },
+  {
+   "song": {
+    "title": "INSTRUMENTALS",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": true
+  },
+  {
+   "song": {
+    "title": "Instrumentally",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Non-Instrumental",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": true
+  },
+  {
+   "song": {
+    "title": "Instrumental_Mix",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": true
+  },
+  {
+   "song": {
+    "title": "Pre-Intro",
+    "duration": 200
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Pre-Intro",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro2",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro 2",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intró",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Éintro",
+    "duration": 100
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "éintro",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Skité",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "intro²",
+    "duration": 50
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "INTRO",
+    "duration": 80
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Zwischenspiel"
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intermission",
+    "duration": 91
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": true
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": "30"
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Normal",
+    "duration": "30"
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Normal",
+    "duration": true
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Normal",
+    "duration": 0
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Normal",
+    "duration": -5
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": 123,
+    "duration": 10
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": null,
+    "duration": 10
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "duration": 10
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "",
+    "duration": 10
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "",
+    "duration": 100
+   },
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": {
+    "title": "Intro",
+    "duration": null
+   },
+   "interlude": true,
+   "instrumental": false
+  },
+  {
+   "song": null,
+   "interlude": false,
+   "instrumental": false
+  },
+  {
+   "song": "Intro",
+   "interlude": false,
+   "instrumental": false
+  }
+ ],
+ "genres": [
+  {
+   "name": "basic",
+   "raw": [
+    {
+     "value": "Hip-Hop",
+     "songCount": 100
+    },
+    {
+     "value": "Deutschrap",
+     "songCount": 50
+    },
+    {
+     "value": "Rock",
+     "songCount": 300
+    },
+    {
+     "value": "Pop",
+     "songCount": 10
+    },
+    {
+     "value": "Jazz",
+     "songCount": 20
+    },
+    {
+     "value": "Electronic",
+     "songCount": 40
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Rock",
+     "genres": [
+      "Rock"
+     ],
+     "songCount": 300
+    },
+    {
+     "name": "Hip Hop",
+     "genres": [
+      "Hip-Hop"
+     ],
+     "songCount": 100
+    },
+    {
+     "name": "Deutschrap",
+     "genres": [
+      "Deutschrap"
+     ],
+     "songCount": 50
+    },
+    {
+     "name": "Electronic",
+     "genres": [
+      "Electronic"
+     ],
+     "songCount": 40
+    },
+    {
+     "name": "Jazz",
+     "genres": [
+      "Jazz"
+     ],
+     "songCount": 20
+    },
+    {
+     "name": "Pop",
+     "genres": [
+      "Pop"
+     ],
+     "songCount": 10
+    }
+   ]
+  },
+  {
+   "name": "order and ties",
+   "raw": [
+    {
+     "value": "Gangsta Rap",
+     "songCount": 10
+    },
+    {
+     "value": "German Hip Hop",
+     "songCount": 5
+    },
+    {
+     "value": "Thug Life",
+     "songCount": 10
+    },
+    {
+     "value": "Trap",
+     "songCount": 10
+    },
+    {
+     "value": "West Coast",
+     "songCount": 10
+    },
+    {
+     "value": "Boom Bap",
+     "songCount": 10
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Hip Hop",
+     "genres": [
+      "Trap",
+      "West Coast",
+      "Boom Bap"
+     ],
+     "songCount": 30
+    },
+    {
+     "name": "Gangsta",
+     "genres": [
+      "Gangsta Rap",
+      "Thug Life"
+     ],
+     "songCount": 20
+    },
+    {
+     "name": "Deutschrap",
+     "genres": [
+      "German Hip Hop"
+     ],
+     "songCount": 5
+    }
+   ]
+  },
+  {
+   "name": "funk rock punk",
+   "raw": [
+    {
+     "value": "Funk",
+     "songCount": 5
+    },
+    {
+     "value": "Funk Rock",
+     "songCount": 5
+    },
+    {
+     "value": "Punk Funk",
+     "songCount": 7
+    },
+    {
+     "value": "Funk Metal",
+     "songCount": 1
+    },
+    {
+     "value": "P-Funk",
+     "songCount": 3
+    },
+    {
+     "value": "G-Funk",
+     "songCount": 2
+    },
+    {
+     "value": "Funky",
+     "songCount": 4
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Rock",
+     "genres": [
+      "Punk Funk",
+      "Funk Rock",
+      "Funk Metal"
+     ],
+     "songCount": 13
+    },
+    {
+     "name": "Funk",
+     "genres": [
+      "Funk",
+      "P-Funk"
+     ],
+     "songCount": 8
+    },
+    {
+     "name": "Gangsta",
+     "genres": [
+      "G-Funk"
+     ],
+     "songCount": 2
+    },
+    {
+     "name": "Other",
+     "genres": [
+      "Funky"
+     ],
+     "songCount": 4
+    }
+   ]
+  },
+  {
+   "name": "rnb soul",
+   "raw": [
+    {
+     "value": "R&B",
+     "songCount": 10
+    },
+    {
+     "value": "R & B",
+     "songCount": 3
+    },
+    {
+     "value": "RnB",
+     "songCount": 4
+    },
+    {
+     "value": "Soul",
+     "songCount": 6
+    },
+    {
+     "value": "Neo-Soul",
+     "songCount": 2
+    },
+    {
+     "value": "Motown",
+     "songCount": 1
+    },
+    {
+     "value": "Rhythm and Blues",
+     "songCount": 9
+    }
+   ],
+   "buckets": [
+    {
+     "name": "R&B / Soul",
+     "genres": [
+      "R&B",
+      "Rhythm and Blues",
+      "Soul",
+      "RnB",
+      "R & B",
+      "Neo-Soul",
+      "Motown"
+     ],
+     "songCount": 35
+    }
+   ]
+  },
+  {
+   "name": "junk",
+   "raw": [
+    {
+     "value": "",
+     "songCount": 3
+    },
+    {
+     "value": "1990",
+     "songCount": 3
+    },
+    {
+     "value": "123",
+     "songCount": 3
+    },
+    {
+     "value": "Divers",
+     "songCount": 3
+    },
+    {
+     "value": "Other",
+     "songCount": 3
+    },
+    {
+     "value": "Unknown",
+     "songCount": 3
+    },
+    {
+     "value": "misc",
+     "songCount": 3
+    },
+    {
+     "value": "None",
+     "songCount": 3
+    },
+    {
+     "value": "???",
+     "songCount": 3
+    },
+    {
+     "value": "--",
+     "songCount": 3
+    },
+    {
+     "value": "Unknown Artist",
+     "songCount": 2
+    },
+    {
+     "value": "Miscellaneous",
+     "songCount": 2
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Other",
+     "genres": [
+      "Unknown Artist",
+      "Miscellaneous"
+     ],
+     "songCount": 4
+    }
+   ]
+  },
+  {
+   "name": "other last",
+   "raw": [
+    {
+     "value": "Spoken Word",
+     "songCount": 1000
+    },
+    {
+     "value": "Comedy",
+     "songCount": 900
+    },
+    {
+     "value": "Pop",
+     "songCount": 1
+    },
+    {
+     "value": "K-Pop",
+     "songCount": 2
+    },
+    {
+     "value": "Synthpop",
+     "songCount": 4
+    },
+    {
+     "value": "Pop Rock",
+     "songCount": 6
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Rock",
+     "genres": [
+      "Pop Rock"
+     ],
+     "songCount": 6
+    },
+    {
+     "name": "Pop",
+     "genres": [
+      "K-Pop",
+      "Pop"
+     ],
+     "songCount": 3
+    },
+    {
+     "name": "Other",
+     "genres": [
+      "Spoken Word",
+      "Comedy",
+      "Synthpop"
+     ],
+     "songCount": 1904
+    }
+   ]
+  },
+  {
+   "name": "soundtrack instrumental world",
+   "raw": [
+    {
+     "value": "Film Score",
+     "songCount": 5
+    },
+    {
+     "value": "Video Game Music",
+     "songCount": 4
+    },
+    {
+     "value": "Musique de Films",
+     "songCount": 3
+    },
+    {
+     "value": "Stage & Screen",
+     "songCount": 2
+    },
+    {
+     "value": "Instrumental",
+     "songCount": 8
+    },
+    {
+     "value": "Reggae",
+     "songCount": 3
+    },
+    {
+     "value": "Latin",
+     "songCount": 2
+    },
+    {
+     "value": "Folk",
+     "songCount": 9
+    },
+    {
+     "value": "World Music",
+     "songCount": 1
+    },
+    {
+     "value": "Country",
+     "songCount": 7
+    },
+    {
+     "value": "Afrobeat",
+     "songCount": 6
+    }
+   ],
+   "buckets": [
+    {
+     "name": "World / Reggae",
+     "genres": [
+      "Folk",
+      "Country",
+      "Afrobeat",
+      "Reggae",
+      "Latin",
+      "World Music"
+     ],
+     "songCount": 28
+    },
+    {
+     "name": "Soundtrack",
+     "genres": [
+      "Film Score",
+      "Video Game Music",
+      "Musique de Films",
+      "Stage & Screen"
+     ],
+     "songCount": 14
+    },
+    {
+     "name": "Instrumental",
+     "genres": [
+      "Instrumental"
+     ],
+     "songCount": 8
+    }
+   ]
+  },
+  {
+   "name": "electronic",
+   "raw": [
+    {
+     "value": "Drum and Bass",
+     "songCount": 1
+    },
+    {
+     "value": "Drum n Bass",
+     "songCount": 1
+    },
+    {
+     "value": "DnB",
+     "songCount": 1
+    },
+    {
+     "value": "House",
+     "songCount": 1
+    },
+    {
+     "value": "Deep House",
+     "songCount": 1
+    },
+    {
+     "value": "Household",
+     "songCount": 1
+    },
+    {
+     "value": "EDM",
+     "songCount": 1
+    },
+    {
+     "value": "Dance",
+     "songCount": 1
+    },
+    {
+     "value": "Ambient",
+     "songCount": 1
+    },
+    {
+     "value": "Electro",
+     "songCount": 1
+    },
+    {
+     "value": "Techno",
+     "songCount": 1
+    },
+    {
+     "value": "Trance",
+     "songCount": 1
+    },
+    {
+     "value": "Dubstep",
+     "songCount": 1
+    },
+    {
+     "value": "Bass Music",
+     "songCount": 1
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Electronic",
+     "genres": [
+      "Drum and Bass",
+      "Drum n Bass",
+      "DnB",
+      "House",
+      "Deep House",
+      "EDM",
+      "Dance",
+      "Ambient",
+      "Electro",
+      "Techno",
+      "Trance",
+      "Dubstep",
+      "Bass Music"
+     ],
+     "songCount": 13
+    },
+    {
+     "name": "Other",
+     "genres": [
+      "Household"
+     ],
+     "songCount": 1
+    }
+   ]
+  },
+  {
+   "name": "jazz blues swing",
+   "raw": [
+    {
+     "value": "Jazz",
+     "songCount": 1
+    },
+    {
+     "value": "Blues",
+     "songCount": 2
+    },
+    {
+     "value": "Swing",
+     "songCount": 3
+    },
+    {
+     "value": "Bossa Nova",
+     "songCount": 4
+    },
+    {
+     "value": "Blues Rock",
+     "songCount": 5
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Jazz",
+     "genres": [
+      "Bossa Nova",
+      "Swing",
+      "Blues",
+      "Jazz"
+     ],
+     "songCount": 10
+    },
+    {
+     "name": "Rock",
+     "genres": [
+      "Blues Rock"
+     ],
+     "songCount": 5
+    }
+   ]
+  },
+  {
+   "name": "hiphop words",
+   "raw": [
+    {
+     "value": "Trap Metal",
+     "songCount": 1
+    },
+    {
+     "value": "Conscious Hip Hop",
+     "songCount": 2
+    },
+    {
+     "value": "Grime",
+     "songCount": 3
+    },
+    {
+     "value": "Drill",
+     "songCount": 4
+    },
+    {
+     "value": "Chopped & Screwed",
+     "songCount": 5
+    },
+    {
+     "value": "Screw",
+     "songCount": 6
+    },
+    {
+     "value": "Horrorcore",
+     "songCount": 7
+    },
+    {
+     "value": "Turntablism",
+     "songCount": 8
+    },
+    {
+     "value": "Crunk",
+     "songCount": 9
+    },
+    {
+     "value": "Dirty South",
+     "songCount": 10
+    },
+    {
+     "value": "East Coast Hip Hop",
+     "songCount": 11
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Hip Hop",
+     "genres": [
+      "East Coast Hip Hop",
+      "Dirty South",
+      "Crunk",
+      "Turntablism",
+      "Horrorcore",
+      "Chopped & Screwed",
+      "Drill",
+      "Grime",
+      "Conscious Hip Hop",
+      "Trap Metal"
+     ],
+     "songCount": 60
+    },
+    {
+     "name": "Other",
+     "genres": [
+      "Screw"
+     ],
+     "songCount": 6
+    }
+   ]
+  },
+  {
+   "name": "unicode and case",
+   "raw": [
+    {
+     "value": "ROCK",
+     "songCount": 3
+    },
+    {
+     "value": "Rock’n’Roll",
+     "songCount": 2
+    },
+    {
+     "value": "Réggae",
+     "songCount": 1
+    },
+    {
+     "value": "Électronique",
+     "songCount": 1
+    },
+    {
+     "value": "Рок",
+     "songCount": 4
+    },
+    {
+     "value": "Popé",
+     "songCount": 1
+    },
+    {
+     "value": "موسيقى",
+     "songCount": 2
+    },
+    {
+     "value": "٣٤",
+     "songCount": 2
+    },
+    {
+     "value": "İstanbul Rock",
+     "songCount": 5
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Rock",
+     "genres": [
+      "İstanbul Rock",
+      "ROCK",
+      "Rock’n’Roll"
+     ],
+     "songCount": 10
+    },
+    {
+     "name": "Pop",
+     "genres": [
+      "Popé"
+     ],
+     "songCount": 1
+    },
+    {
+     "name": "Other",
+     "genres": [
+      "Рок",
+      "موسيقى",
+      "٣٤",
+      "Réggae",
+      "Électronique"
+     ],
+     "songCount": 10
+    }
+   ]
+  },
+  {
+   "name": "songCount variants",
+   "raw": [
+    {
+     "value": "Rock",
+     "songCount": "12"
+    },
+    {
+     "value": "Metal",
+     "songCount": "7"
+    },
+    {
+     "value": "Punk"
+    },
+    {
+     "value": "Grunge",
+     "songCount": null
+    },
+    {
+     "value": "Hardcore",
+     "songCount": 5.5
+    },
+    {
+     "value": "Rock Pop",
+     "songCount": true
+    },
+    {
+     "value": "Metal Pop",
+     "songCount": 3
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Rock",
+     "genres": [
+      "Rock",
+      "Metal",
+      "Hardcore",
+      "Metal Pop",
+      "Rock Pop",
+      "Punk",
+      "Grunge"
+     ],
+     "songCount": 28.5
+    }
+   ]
+  },
+  {
+   "name": "bad entries",
+   "raw": [
+    null,
+    5,
+    "Rock",
+    {},
+    {
+     "value": 5
+    },
+    {
+     "value": null
+    },
+    {
+     "value": "Rock",
+     "songCount": 1
+    },
+    [],
+    {
+     "value": "Pop",
+     "songCount": 2
+    }
+   ],
+   "buckets": [
+    {
+     "name": "Pop",
+     "genres": [
+      "Pop"
+     ],
+     "songCount": 2
+    },
+    {
+     "name": "Rock",
+     "genres": [
+      "Rock"
+     ],
+     "songCount": 1
+    }
+   ]
+  },
+  {
+   "name": "empty",
+   "raw": [],
+   "buckets": []
+  }
+ ],
+ "merge": [
+  {
+   "name": "single list",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     },
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     },
+     {
+      "id": "s4",
+      "title": "Song 4",
+      "duration": 200
+     },
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     },
+     {
+      "id": "s6",
+      "title": "Song 6",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 6,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "s6",
+    "s4",
+    "s3",
+    "s1",
+    "s5",
+    "s2"
+   ]
+  },
+  {
+   "name": "two lists round robin",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     },
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     },
+     {
+      "id": "s4",
+      "title": "Song 4",
+      "duration": 200
+     },
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     },
+     {
+      "id": "s6",
+      "title": "Song 6",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s7",
+      "title": "Song 7",
+      "duration": 200
+     },
+     {
+      "id": "s8",
+      "title": "Song 8",
+      "duration": 200
+     },
+     {
+      "id": "s9",
+      "title": "Song 9",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 6,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "s9",
+    "s6",
+    "s7",
+    "s4",
+    "s8",
+    "s2"
+   ]
+  },
+  {
+   "name": "duplicates across lists",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     },
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     },
+     {
+      "id": "s4",
+      "title": "Song 4",
+      "duration": 200
+     },
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     },
+     {
+      "id": "s6",
+      "title": "Song 6",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 10,
+   "rng": [
+    0.999,
+    0,
+    0.999,
+    0,
+    0.5
+   ],
+   "expected": [
+    "s5",
+    "s4",
+    "s3",
+    "s1",
+    "s6",
+    "s2"
+   ]
+  },
+  {
+   "name": "count smaller",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     },
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     },
+     {
+      "id": "s4",
+      "title": "Song 4",
+      "duration": 200
+     },
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s6",
+      "title": "Song 6",
+      "duration": 200
+     },
+     {
+      "id": "s7",
+      "title": "Song 7",
+      "duration": 200
+     },
+     {
+      "id": "s8",
+      "title": "Song 8",
+      "duration": 200
+     },
+     {
+      "id": "s9",
+      "title": "Song 9",
+      "duration": 200
+     },
+     {
+      "id": "s10",
+      "title": "Song 10",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 3,
+   "rng": [
+    0.37
+   ],
+   "expected": [
+    "s1",
+    "s3",
+    "s8"
+   ]
+  },
+  {
+   "name": "count zero",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 0,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": []
+  },
+  {
+   "name": "negative count",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     },
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": -4,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": []
+  },
+  {
+   "name": "empty lists",
+   "lists": [
+    [],
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     }
+    ],
+    []
+   ],
+   "count": 5,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "s1"
+   ]
+  },
+  {
+   "name": "no lists",
+   "lists": [],
+   "count": 5,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": []
+  },
+  {
+   "name": "three uneven",
+   "lists": [
+    [
+     {
+      "id": "s1",
+      "title": "Song 1",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s2",
+      "title": "Song 2",
+      "duration": 200
+     },
+     {
+      "id": "s3",
+      "title": "Song 3",
+      "duration": 200
+     },
+     {
+      "id": "s4",
+      "title": "Song 4",
+      "duration": 200
+     },
+     {
+      "id": "s5",
+      "title": "Song 5",
+      "duration": 200
+     },
+     {
+      "id": "s6",
+      "title": "Song 6",
+      "duration": 200
+     }
+    ],
+    [
+     {
+      "id": "s7",
+      "title": "Song 7",
+      "duration": 200
+     },
+     {
+      "id": "s8",
+      "title": "Song 8",
+      "duration": 200
+     }
+    ]
+   ],
+   "count": 7,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "s6",
+    "s5",
+    "s1",
+    "s3",
+    "s7",
+    "s8",
+    "s4"
+   ]
+  }
+ ],
+ "collect": [
+  {
+   "name": "no filters one round",
+   "rounds": [
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      },
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      },
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      },
+      {
+       "id": "g5",
+       "title": "Good 5",
+       "duration": 200
+      },
+      {
+       "id": "g6",
+       "title": "Good 6",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 4,
+   "skipInterludes": false,
+   "skipInstrumentals": false,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "g2",
+    "g3",
+    "g6",
+    "g4"
+   ],
+   "short": false
+  },
+  {
+   "name": "filters enough in first round",
+   "rounds": [
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      },
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      },
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      },
+      {
+       "id": "g5",
+       "title": "Good 5",
+       "duration": 200
+      },
+      {
+       "id": "i1",
+       "title": "Intro",
+       "duration": 30
+      },
+      {
+       "id": "n1",
+       "title": "X (Instrumental)",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 4,
+   "skipInterludes": true,
+   "skipInstrumentals": true,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "g4",
+    "g5",
+    "g3",
+    "g2"
+   ],
+   "short": false
+  },
+  {
+   "name": "filters top up",
+   "rounds": [
+    [
+     [
+      {
+       "id": "i1",
+       "title": "Intro",
+       "duration": 30
+      },
+      {
+       "id": "i2",
+       "title": "Skit",
+       "duration": 20
+      },
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      },
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      },
+      {
+       "id": "g5",
+       "title": "Good 5",
+       "duration": 200
+      },
+      {
+       "id": "i1",
+       "title": "Intro",
+       "duration": 30
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g6",
+       "title": "Good 6",
+       "duration": 200
+      },
+      {
+       "id": "g7",
+       "title": "Good 7",
+       "duration": 200
+      },
+      {
+       "id": "g8",
+       "title": "Good 8",
+       "duration": 200
+      },
+      {
+       "id": "g9",
+       "title": "Good 9",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 6,
+   "skipInterludes": true,
+   "skipInstrumentals": false,
+   "rng": [
+    0.999,
+    0,
+    0.999,
+    0,
+    0.5
+   ],
+   "expected": [
+    "g3",
+    "g2",
+    "g8",
+    "g4",
+    "g6",
+    "g5"
+   ],
+   "short": false
+  },
+  {
+   "name": "extra rounds capped",
+   "rounds": [
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g5",
+       "title": "Good 5",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 10,
+   "skipInterludes": true,
+   "skipInstrumentals": true,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "g1",
+    "g4",
+    "g3",
+    "g2"
+   ],
+   "short": true
+  },
+  {
+   "name": "stops when nothing new",
+   "rounds": [
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      },
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 10,
+   "skipInterludes": false,
+   "skipInstrumentals": true,
+   "rng": [
+    0.37
+   ],
+   "expected": [
+    "g1",
+    "g2"
+   ],
+   "short": true
+  },
+  {
+   "name": "two lists per round",
+   "rounds": [
+    [
+     [
+      {
+       "id": "g1",
+       "title": "Good 1",
+       "duration": 200
+      },
+      {
+       "id": "g2",
+       "title": "Good 2",
+       "duration": 200
+      },
+      {
+       "id": "g3",
+       "title": "Good 3",
+       "duration": 200
+      },
+      {
+       "id": "i1",
+       "title": "Intro",
+       "duration": 10
+      }
+     ],
+     [
+      {
+       "id": "g4",
+       "title": "Good 4",
+       "duration": 200
+      },
+      {
+       "id": "g5",
+       "title": "Good 5",
+       "duration": 200
+      },
+      {
+       "id": "n1",
+       "title": "Instrumental",
+       "duration": 200
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "id": "g6",
+       "title": "Good 6",
+       "duration": 200
+      },
+      {
+       "id": "g7",
+       "title": "Good 7",
+       "duration": 200
+      },
+      {
+       "id": "g8",
+       "title": "Good 8",
+       "duration": 200
+      }
+     ],
+     [
+      {
+       "id": "g9",
+       "title": "Good 9",
+       "duration": 200
+      },
+      {
+       "id": "g10",
+       "title": "Good 10",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 8,
+   "skipInterludes": true,
+   "skipInstrumentals": true,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "g2",
+    "g4",
+    "g5",
+    "g10",
+    "g3",
+    "g9",
+    "g6",
+    "g8"
+   ],
+   "short": false
+  },
+  {
+   "name": "only instrumentals skipped",
+   "rounds": [
+    [
+     [
+      {
+       "id": "a",
+       "title": "Intro",
+       "duration": 20
+      },
+      {
+       "id": "b",
+       "title": "Foo Instrumental",
+       "duration": 200
+      },
+      {
+       "id": "c",
+       "title": "Bar",
+       "duration": 200
+      }
+     ]
+    ]
+   ],
+   "count": 5,
+   "skipInterludes": false,
+   "skipInstrumentals": true,
+   "rng": [
+    0.1,
+    0.9,
+    0.5,
+    0.3,
+    0.7,
+    0.2,
+    0.8,
+    0.4,
+    0.6,
+    0.05,
+    0.95
+   ],
+   "expected": [
+    "c",
+    "a"
+   ],
+   "short": true
+  }
+ ]
+}

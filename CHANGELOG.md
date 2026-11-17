@@ -8,6 +8,23 @@ All notable changes to this project are listed here. The format follows
 Each release is published as a container image:
 `ghcr.io/m8-t/navidrome-wiim-bridge:<version>`.
 
+## [0.15.0] - 2026-11-17
+
+### Added
+
+- Optional radio: with `BRIDGE_RADIO=true` the bridge picks an endless shuffled mix from Navidrome for a stream encoder such as Liquidsoap, which plays it to Icecast. `GET /radio/next` hands out the next track in Liquidsoap's annotate format and `GET /radio/track/<id>` streams it; both need `BRIDGE_RADIO_TOKEN`, and only tracks the radio handed out in the last 6 hours can be streamed. New settings: `BRIDGE_RADIO_TOKEN` (required with the radio), `BRIDGE_RADIO_STATE_PATH`, `BRIDGE_RADIO_STREAM_URL` and `BRIDGE_RADIO_FORMAT`. The radio is off by default.
+- The radio follows the same mix rules as the random mix on the remote page: genre buckets, round-robin between genres, and the switches that skip intros, skits, acapellas and instrumentals. A change takes effect from the next track.
+- A Radio section in the remote page's settings sheet, shown only when the radio is on: genre chips (none picked means the whole library), the two skip switches, the track now playing and the stream URL with a Copy button.
+- Example Icecast and Liquidsoap manifests as an optional kustomize component in `deploy/kubernetes/radio/`, with notes on adding the stream to Euro Truck Simulator 2.
+
+### Changed
+
+- New unauthenticated `GET /remote/config.json` tells the remote page which optional features are on.
+
+### Known limitations
+
+- The radio's "now playing" on the remote page can run one track ahead of what is audible, because Liquidsoap fetches the next track in advance. The title inside the stream is correct.
+
 ## [0.14.0] - 2026-11-10
 
 ### Added

@@ -1,0 +1,44 @@
+# Optional radio. Not part of the default kustomization.
+# Use it from an overlay of your own, see ../README.md ("Radio").
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - radio-state-pvc.yaml
+  - icecast-deployment.yaml
+  - icecast-service.yaml
+  - liquidsoap-configmap.yaml
+  - liquidsoap-deployment.yaml
+patches:
+  - target:
+      kind: ConfigMap
+      name: wiim-bridge
+    patch: |-
+      - op: add
+        path: /data/BRIDGE_RADIO
+        value: "true"
+      - op: add
+        path: /data/BRIDGE_RADIO_STATE_PATH
+        value: /var/lib/radio/settings.json
+  - target:
+      kind: Deployment
+      name: wiim-bridge
+    patch: |-
+      - op: add
+        path: /spec/template/spec/securityContext/fsGroup
+        value: 65532
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          secretRef:
+            name: wiim-bridge-radio
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: radio-state
+          mountPath: /var/lib/radio
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: radio-state
+          persistentVolumeClaim:
+            claimName: wiim-bridge-radio-state

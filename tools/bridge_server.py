@@ -9,7 +9,7 @@ import socket
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,7 @@ DEFAULT_BIND = "0.0.0.0"
 DEFAULT_PORT = 8098
 DEFAULT_MAX_VOLUME = 100
 DEFAULT_QUEUE_NAME = "bridge"
+DEFAULT_RADIO_FORMAT = "raw"
 TRUE_VALUES = frozenset({"true", "1", "yes"})
 FALSE_VALUES = frozenset({"false", "0", "no"})
 
@@ -56,6 +57,11 @@ class Settings:
     scrobble: bool
     info_file: Path | None
     credentials: str
+    radio: bool = False
+    radio_token: str = field(default="", repr=False)
+    radio_state_path: Path | None = None
+    radio_stream_url: str | None = None
+    radio_format: str = DEFAULT_RADIO_FORMAT
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -121,6 +127,34 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         help="report plays to Navidrome so its play history includes them (env BRIDGE_SCROBBLE: "
         "true/1/yes or false/0/no, default: false)",
+    )
+    parser.add_argument(
+        "--radio",
+        action="store_const",
+        const=True,
+        default=None,
+        help="serve an endless shuffled mix to a stream encoder such as Liquidsoap, see the README "
+        "(env BRIDGE_RADIO: true/1/yes or false/0/no, default: false)",
+    )
+    parser.add_argument(
+        "--radio-token",
+        help="shared secret of the encoder-facing radio endpoints (env BRIDGE_RADIO_TOKEN, "
+        "required with --radio)",
+    )
+    parser.add_argument(
+        "--radio-state-path",
+        help="JSON file that keeps the radio mix settings (env BRIDGE_RADIO_STATE_PATH, "
+        "default: in memory only)",
+    )
+    parser.add_argument(
+        "--radio-stream-url",
+        help="public listen URL shown on the remote page (env BRIDGE_RADIO_STREAM_URL, "
+        "default: not shown)",
+    )
+    parser.add_argument(
+        "--radio-format",
+        help="Navidrome stream format for radio tracks (env BRIDGE_RADIO_FORMAT, "
+        f"default: {DEFAULT_RADIO_FORMAT})",
     )
     parser.add_argument(
         "--info-file",
@@ -224,6 +258,11 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
     )
     keep_queue = _boolean(args.keep_queue_on_start, environ, "BRIDGE_KEEP_QUEUE_ON_START")
     scrobble = _boolean(args.scrobble, environ, "BRIDGE_SCROBBLE")
+    radio = _boolean(args.radio, environ, "BRIDGE_RADIO")
+    radio_token, _ = _pick(args.radio_token, environ, "BRIDGE_RADIO_TOKEN")
+    if radio and radio_token is None:
+        raise ConfigError("set BRIDGE_RADIO_TOKEN (or --radio-token) when the radio is on")
+    radio_state_path, _ = _pick(args.radio_state_path, environ, "BRIDGE_RADIO_STATE_PATH")
     return Settings(
         advertise_host=advertise_host,
         device_base=device_base,
@@ -240,6 +279,13 @@ def resolve_settings(args: argparse.Namespace, environ: Mapping[str, str]) -> Se
         scrobble=scrobble,
         info_file=args.info_file,
         credentials=_string(args.credentials, environ, "BRIDGE_CREDENTIALS", DEFAULT_CREDENTIALS),
+        radio=radio,
+        radio_token=radio_token or "",
+        radio_state_path=Path(radio_state_path).expanduser() if radio_state_path else None,
+        radio_stream_url=_pick(args.radio_stream_url, environ, "BRIDGE_RADIO_STREAM_URL")[0],
+        radio_format=_string(
+            args.radio_format, environ, "BRIDGE_RADIO_FORMAT", DEFAULT_RADIO_FORMAT
+        ),
     )
 
 
@@ -339,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("audio URLs under /s/<hidden>")
     if settings.scrobble:
         logger.info("scrobbling plays to navidrome")
+    if settings.radio:
+        logger.info("radio enabled, endpoints under /radio")
     config = BridgeConfig(
         navidrome_url=settings.navidrome_url,
         user=user,
@@ -354,6 +402,11 @@ def main(argv: list[str] | None = None) -> int:
         clear_on_start=not settings.keep_queue_on_start,
         scrobble=settings.scrobble,
         device_port=settings.device_port,
+        radio=settings.radio,
+        radio_token=settings.radio_token,
+        radio_state_path=settings.radio_state_path,
+        radio_stream_url=settings.radio_stream_url,
+        radio_format=settings.radio_format,
     )
     web.run_app(
         make_app_factory(config)(),

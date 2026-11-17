@@ -597,3 +597,29 @@ export function parseThemeMessage(data) {
   if (data.type !== "kiosk-theme" || !isTheme(data.theme)) return null;
   return data.theme;
 }
+
+export function radioNowPlayingText(nowPlaying) {
+  if (!nowPlaying || typeof nowPlaying !== "object") return "Nothing played yet";
+  const title = String(nowPlaying.title || "").trim();
+  const artist = String(nowPlaying.artist || "").trim();
+  if (!title) return "Nothing played yet";
+  return artist ? `${artist} - ${title}` : title;
+}
+
+export function radioGenreHint(buckets) {
+  const count = Array.isArray(buckets) ? buckets.length : 0;
+  return count ? `${count} selected` : "Whole library";
+}
+
+export function toggleRadioBucket(buckets, name) {
+  const list = Array.isArray(buckets) ? buckets : [];
+  return list.includes(name) ? list.filter((b) => b !== name) : [...list, name];
+}
+
+export function radioSettingsBody({ buckets, skipInterludes, skipInstrumentals }) {
+  return {
+    buckets: Array.isArray(buckets) ? buckets.filter((b) => typeof b === "string") : [],
+    skipInterludes: skipInterludes === true,
+    skipInstrumentals: skipInstrumentals === true,
+  };
+}

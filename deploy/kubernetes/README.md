@@ -100,6 +100,77 @@ Remove the four `navidrome-` lines and the `deluan/navidrome` image entry from `
 
 The bridge works with any Subsonic client that has a jukebox mode and with its own phone page. To leave Feishin out, remove the three `feishin-` lines and the `feishin-jukebox` image entry from `kustomization.yaml`, and the `music` host from the Ingress or route. The bridge then needs HTTPS only if another HTTPS page calls it.
 
+## Radio
+
+Optional and separate from the default kustomization. It adds an Icecast server and a
+Liquidsoap encoder that pulls an endless shuffled mix from the bridge and streams it as
+MP3, for anything that can play an Icecast URL (for example Euro Truck Simulator 2).
+
+What the `radio/` component adds:
+
+- `wiim-radio-icecast` Deployment and Service (ClusterIP, port 8000).
+- `wiim-radio-liquidsoap` Deployment, with its script in the `wiim-radio-liquidsoap` ConfigMap.
+- `wiim-bridge-radio-state` PersistentVolumeClaim (64Mi) so the mix settings survive restarts.
+- Patches to the bridge: `BRIDGE_RADIO=true`, `BRIDGE_RADIO_STATE_PATH`, the state volume, and the Secret `wiim-bridge-radio` as extra environment.
+
+Images, pinned and checked to be multi-arch (the manifest lists contain `linux/arm64` and `linux/amd64`):
+
+- `savonet/liquidsoap:v2.4.6`, the official image, full variant (not `-minimal`: the bridge hands out original files, which need the ffmpeg decoders).
+- `libretime/icecast:2.4.4`, a maintained image that follows upstream Icecast and configures it from environment variables. Its tags are rebuilt when the base image changes; pin by digest if you want fully reproducible pods.
+
+Steps:
+
+1. Create the Secret `wiim-bridge-radio` (see `radio/secret.example.yaml`). It holds the token shared by the bridge and Liquidsoap and the two Icecast passwords.
+
+   ```sh
+   kubectl create secret generic wiim-bridge-radio \
+     --from-literal=BRIDGE_RADIO_TOKEN="$(openssl rand -hex 16)" \
+     --from-literal=ICECAST_SOURCE_PASSWORD="$(openssl rand -hex 16)" \
+     --from-literal=ICECAST_ADMIN_PASSWORD="$(openssl rand -hex 16)"
+   ```
+
+2. Make an overlay that includes the base and the component, and apply that instead of the base:
+
+   ```yaml
+   # overlay/kustomization.yaml
+   apiVersion: kustomize.config.k8s.io/v1beta1
+   kind: Kustomization
+   resources:
+     - ../deploy/kubernetes
+   components:
+     - ../deploy/kubernetes/radio
+   ```
+
+   ```sh
+   kubectl apply -k overlay/
+   ```
+
+3. Expose Icecast to the listener. The Service is ClusterIP. For listeners on the LAN, change `type` in `radio/icecast-service.yaml` to `LoadBalancer` (add your load balancer's fixed-address annotation, as in `service.yaml`) or to `NodePort`. Use plain HTTP: games and old players rarely handle TLS.
+
+4. Set `BRIDGE_RADIO_STREAM_URL` to the public listen URL, for example `http://<address>:8000/radio.mp3`, in `configmap.yaml`. The remote page then shows it with a copy button.
+
+5. Open the remote page, Settings > Radio, and pick genres or leave them all off for the whole library.
+
+Notes:
+
+- Liquidsoap reaches the bridge on its ClusterIP Service (`RADIO_BRIDGE_URL`, port 8098). The track addresses the bridge returns use the same host, so they work from inside the cluster. The radio endpoints are not served on the device port.
+- Stream name, description and genre are the `STREAM_*` variables in `radio/liquidsoap-deployment.yaml`. Crossfade is off. The mount is `/radio.mp3` at 320 kbit/s.
+- When the bridge or Navidrome is down, Liquidsoap plays silence and retries every 3 seconds, so the stream stays up.
+- The "now playing" line on the page is the last track handed to Liquidsoap, which prefetches, so it can be one track ahead of what you hear.
+- Icecast's start script edits `/etc/icecast.xml`, so these containers keep a writable root filesystem.
+
+### Euro Truck Simulator 2
+
+Add the stream to the game's `live_streams.sii` with the game closed. Its location is `Documents/Euro Truck Simulator 2/` on Windows and `~/.local/share/Euro Truck Simulator 2/` on Linux. Each entry is one line, numbered from 0, and `stream_data:` holds the number of entries:
+
+```
+ stream_data: 2
+ stream_data[0]: "http://radio.example.org:8000/radio.mp3|My radio|Various|EN|320|0"
+ stream_data[1]: "http://other.example/stream|Other|Rock|EN|128|0"
+```
+
+The fields are `url|name|genre|language|bitrate|favorite`. Keep the existing header lines of the file, add your lines, and raise the `stream_data:` count to match. Use a plain `http://` address; the game's player does not reliably handle HTTPS. The new station then appears in the in-game radio list.
+
 ## Notes
 
 - Run exactly one bridge replica. Two bridges would fight over the amplifier's queue.

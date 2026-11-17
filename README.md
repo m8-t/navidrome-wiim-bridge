@@ -236,7 +236,7 @@ podman run --rm -p 8098:8098 \
   -e BRIDGE_NAVIDROME_URL=http://navidrome:4533 \
   -e BRIDGE_NAVIDROME_USER=... -e BRIDGE_NAVIDROME_PASSWORD=... \
   -e BRIDGE_SECRET=... \
-  ghcr.io/m8-t/navidrome-wiim-bridge:0.14.0
+  ghcr.io/m8-t/navidrome-wiim-bridge:0.15.0
 ```
 
 ### Kubernetes
@@ -258,6 +258,46 @@ how to use a Navidrome you already run and how to leave the web UI out.
 `GET /healthz` answers `ok` without touching the device or Navidrome.
 
 Run one copy only. Two bridges on one WiiM overwrite each other's queue.
+
+### Radio (`--radio`, `BRIDGE_RADIO`)
+
+Optional and off by default. With it on, the bridge keeps an endless shuffled mix from
+Navidrome and hands it out one track at a time to a stream encoder such as
+[Liquidsoap](https://www.liquidsoap.info/), which encodes MP3 and pushes it to an
+[Icecast](https://icecast.org/) server. Anything that plays an Icecast URL can then listen,
+for example a game with an internet radio feature. With it off, no radio route exists and
+the remote page shows nothing about it.
+
+| Environment variable | Option | Default | Meaning |
+|---|---|---|---|
+| `BRIDGE_RADIO` | `--radio` | `false` | turn the radio on |
+| `BRIDGE_RADIO_TOKEN` | `--radio-token` | none, **required** when the radio is on | shared secret of the encoder-facing endpoints; the bridge refuses to start without it |
+| `BRIDGE_RADIO_STATE_PATH` | `--radio-state-path` | none | JSON file that keeps the mix settings across restarts; without it they live in memory only |
+| `BRIDGE_RADIO_STREAM_URL` | `--radio-stream-url` | none | public listen URL, shown with a copy button in the remote page's settings |
+| `BRIDGE_RADIO_FORMAT` | `--radio-format` | `raw` | `format` parameter passed to Navidrome's `stream` call for radio tracks |
+
+The encoder talks to two endpoints, both authenticated with the token as
+`Authorization: Bearer <token>` or `?token=<token>`:
+
+- `GET /radio/next` answers one line in Liquidsoap's `annotate:` form with the title, artist
+  and album and the address of the next track. The address is built from the `Host` the
+  encoder used, so it works through whatever name the encoder reaches the bridge by
+  (the advertised device address would not: it only exposes the audio port).
+- `GET /radio/track/<id>` streams that track from Navidrome. It only serves ids handed out
+  by `/radio/next` in the last 6 hours, so the token cannot pull arbitrary files.
+
+Radio plays are never scrobbled. The mix is chosen on the remote page (Settings > Radio):
+genre buckets (none selected means the whole library) and the two skip switches, the same
+filters as the random mix; skipping is on by default. A change takes effect from the next
+track. The page's own calls to `/radio/settings` use the same Navidrome login as the rest
+of the page. The "now playing" line follows what was last handed to the encoder, so it can
+run one track ahead of what is audible.
+
+The bridge keeps about 10 to 60 upcoming songs, refills in the background and does not
+repeat any of the last 300 unless the library is too small to avoid it. If Navidrome
+fails it retries with a growing delay and `/radio/next` answers 503 meanwhile; the example
+encoder script then plays silence. The ready-made Icecast and Liquidsoap manifests are
+in [`deploy/kubernetes/radio/`](deploy/kubernetes/radio/).
 
 ### Play history (`--scrobble`, `BRIDGE_SCROBBLE`)
 

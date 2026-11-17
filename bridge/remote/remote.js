@@ -3,7 +3,7 @@ import {
   estimatePosition, reconcilePosition, gainToPercent, percentToGain, unwrap,
   formatDuration, queueSummary, progressFraction, trackArtistIfDifferent, silenceWav,
   mediaMetadataInit, positionState, needsRefresh, needsEntries, isAddOnly, createLanes,
-  playNextCalls, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep, sortAlbumsByYear,
+  playNextCalls, radioNowPlayingText, radioGenreHint, toggleRadioBucket, radioSettingsBody, moveEntry, indexAfterMove, dragTargetIndex, dragShift, autoScrollStep, sortAlbumsByYear,
   countLabel, playlistInfo, ownPlaylists, createViewStack, normalizeRepeat, nextRepeat,
   THEME_COLORS, loadTheme, saveTheme, isTheme, parseThemeMessage,
 } from "./logic.js";
@@ -79,6 +79,9 @@ let statusTimer = null;
 let queueKey = null;
 let queueIndex = -1;
 let mixGenres = null;
+let radioEnabled = false;
+let radioState = null;
+let radioTimer = null;
 let mixBusy = false;
 let searchTimer = null;
 let searchToken = 0;
@@ -1460,14 +1463,131 @@ function openSettings() {
     ? "Plays silence on this phone so the lock screen shows the controls. Other audio on the phone will pause."
     : "Not supported by this browser.";
   showSheet($("sheet"));
+  openRadio();
 }
 
 function closeSheet(restoreFocus = true) {
   const root = activeSheet();
   if (!root) return;
   root.hidden = true;
+  stopRadioPolling();
   if (restoreFocus && sheetReturnFocus && sheetReturnFocus.focus) sheetReturnFocus.focus();
   sheetReturnFocus = null;
+}
+
+async function radioRequest(method, body) {
+  const query = new URLSearchParams(apiParams(auth));
+  const init = body
+    ? { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : { method };
+  const resp = await fetch(`/radio/settings?${query}`, init);
+  let json = null;
+  try {
+    json = await resp.json();
+  } catch {
+    // reported below
+  }
+  if (!resp.ok || !json) throw new Error((json && json.error) || `Radio request failed (HTTP ${resp.status})`);
+  return json;
+}
+
+function renderRadio(state) {
+  radioState = state;
+  const picked = state.settings.buckets;
+  const names = state.buckets.map((bucket) => bucket.name);
+  const box = $("radio-genres");
+  box.replaceChildren();
+  for (const name of [...names, ...picked.filter((p) => !names.includes(p))]) {
+    const chip = el("button", "chip", name);
+    chip.type = "button";
+    chip.dataset.genre = name;
+    chip.setAttribute("aria-pressed", String(picked.includes(name)));
+    box.append(chip);
+  }
+  $("radio-genre-hint").textContent = radioGenreHint(picked);
+  $("radio-skip").checked = state.settings.skipInterludes;
+  $("radio-skip-instrumental").checked = state.settings.skipInstrumentals;
+  $("radio-now").textContent = radioNowPlayingText(state.nowPlaying);
+  const url = state.streamUrl || "";
+  $("radio-url-row").hidden = !url;
+  $("radio-url").value = url;
+}
+
+async function refreshRadio() {
+  try {
+    renderRadio(await radioRequest("GET"));
+  } catch (err) {
+    showStatus(err.message || "Radio request failed");
+  }
+}
+
+function openRadio() {
+  $("radio-section").hidden = !radioEnabled;
+  if (!radioEnabled) return;
+  refreshRadio();
+  stopRadioPolling();
+  radioTimer = setInterval(async () => {
+    try {
+      const state = await radioRequest("GET");
+      $("radio-now").textContent = radioNowPlayingText(state.nowPlaying);
+    } catch {
+      // the next tick tries again
+    }
+  }, 10000);
+}
+
+function stopRadioPolling() {
+  clearInterval(radioTimer);
+  radioTimer = null;
+}
+
+async function saveRadio(settings) {
+  try {
+    renderRadio(await radioRequest("PUT", radioSettingsBody(settings)));
+  } catch (err) {
+    showStatus(err.message || "Radio request failed");
+    refreshRadio();
+  }
+}
+
+function currentRadioSettings() {
+  return {
+    buckets: [...document.querySelectorAll("#radio-genres [aria-pressed='true']")].map((b) => b.dataset.genre),
+    skipInterludes: $("radio-skip").checked,
+    skipInstrumentals: $("radio-skip-instrumental").checked,
+  };
+}
+
+function bindRadio() {
+  $("radio-genres").addEventListener("click", (event) => {
+    const chip = event.target.closest(".chip");
+    if (!chip || !radioState) return;
+    const current = currentRadioSettings();
+    saveRadio({ ...current, buckets: toggleRadioBucket(current.buckets, chip.dataset.genre) });
+  });
+  for (const id of ["radio-skip", "radio-skip-instrumental"]) {
+    $(id).addEventListener("change", () => saveRadio(currentRadioSettings()));
+  }
+  $("radio-copy").addEventListener("click", async () => {
+    const input = $("radio-url");
+    try {
+      await navigator.clipboard.writeText(input.value);
+      showStatus("Copied", true);
+    } catch {
+      input.select();
+      showStatus("Press copy on the selected text", true);
+    }
+  });
+}
+
+async function loadFeatures() {
+  try {
+    const resp = await fetch("/remote/config.json");
+    const json = await resp.json();
+    radioEnabled = json.radio === true;
+  } catch {
+    radioEnabled = false;
+  }
 }
 
 function loadMixChoice() {
@@ -1829,6 +1949,8 @@ function init() {
   bindTheme();
   bindSheet();
   bindMix();
+  bindRadio();
+  loadFeatures();
   bindPlaylistSheet();
   startLoops();
   auth = loadStoredAuth();

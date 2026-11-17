@@ -387,6 +387,7 @@ body.in-app.has-mini .status { bottom: calc(var(--inset-b) + var(--tabbar-h) + v
   min-height: 48px; padding: 0 16px; border-radius: 999px; background: var(--raised); color: var(--text); font-weight: 600;
 }
 .seg button[aria-pressed="true"], .chip[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+#radio-url { flex: 1; min-width: 0; min-height: 48px; padding: 0 16px; border: 1px solid var(--line); border-radius: 999px; background: var(--raised); color: var(--text); font-size: 0.9375rem; }
 .years { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .chips { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: min(240px, 28dvh); overflow-y: auto; }
 

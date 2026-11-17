@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiim-radio-icecast
+  labels:
+    app.kubernetes.io/name: wiim-radio-icecast
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wiim-radio-icecast
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wiim-radio-icecast
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: icecast
+          # Multi-arch (linux/amd64 and linux/arm64). Icecast 2.4.4.
+          image: libretime/icecast:2.4.4
+          env:
+            - name: ICECAST_SOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: ICECAST_SOURCE_PASSWORD
+            - name: ICECAST_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: ICECAST_ADMIN_PASSWORD
+            - name: ICECAST_RELAY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: ICECAST_ADMIN_PASSWORD
+            # Listener limit.
+            - name: ICECAST_MAX_CLIENTS
+              value: "20"
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
